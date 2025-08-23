@@ -17,6 +17,7 @@ from ..processing.pdf_parser import load_html
 from ..processing.chunker import chunk_document
 from ..graph.neo4j_graph import Neo4jGraph
 from ..evaluation.ragas_evaluation import evaluate_ragas
+from ..config import Config
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.documents import Document
 from langchain.retrievers.contextual_compression import ContextualCompressionRetriever
