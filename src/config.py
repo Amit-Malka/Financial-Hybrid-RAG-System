@@ -3,9 +3,10 @@ class Config:
     CHUNK_SIZE = 400
     CHUNK_OVERLAP = 50
     
-    # Hybrid retrieval (simplified)
-    DENSE_WEIGHT = 0.8
-    TFIDF_WEIGHT = 0.2
+    # Hybrid retrieval (per specification: 70% Dense + 30% TF-IDF + 15% Graph Enhancement)
+    DENSE_WEIGHT = 0.7
+    TFIDF_WEIGHT = 0.3
+    GRAPH_ENHANCEMENT_WEIGHT = 0.15
     
     # 10-Q specific TF-IDF terms
     FINANCIAL_10Q_TERMS = {
@@ -30,6 +31,12 @@ class Config:
     # UI settings
     DEFAULT_TOP_K = 5
     GOOGLE_API_KEY = ""  # User provided
+    
+    # Chunk ID configuration (5th metadata field)
+    CHUNK_ID_PREFIX = "chunk_"
+    
+    # Graph enhancement settings
+    ENABLE_GRAPH_ENHANCEMENT = True
 
     # Metadata schema
     METADATA_SCHEMA = {

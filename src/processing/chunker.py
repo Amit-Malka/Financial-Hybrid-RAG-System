@@ -2,13 +2,16 @@ from langchain_core.documents import Document
 from sec_parser.semantic_elements.abstract_semantic_element import AbstractSemanticElement
 from sec_parser.semantic_elements.top_section_title import TopSectionTitle
 import logging
+from ..config import Config
 
 def chunk_document(elements: list[AbstractSemanticElement]) -> list[Document]:
     """Converts SEC semantic elements into LangChain Documents with metadata."""
     logger = logging.getLogger("processing.chunker")
     chunks = []
-    for element in elements:
+    for i, element in enumerate(elements):
         metadata = {"element_type": element.__class__.__name__}
+        # Add unique chunk identifier (5th metadata field per specification)
+        metadata["chunk_id"] = f"{Config.CHUNK_ID_PREFIX}{i}"
         # Safely enrich metadata if attributes exist on the element
         page_number = getattr(element, "page_number", None)
         if page_number is not None:
@@ -20,7 +23,7 @@ def chunk_document(elements: list[AbstractSemanticElement]) -> list[Document]:
         if content_type is not None:
             metadata["content_type"] = content_type
         chunks.append(Document(page_content=str(element), metadata=metadata))
-    logger.info(f"Chunked {len(elements)} elements -> {len(chunks)} documents")
+    logger.info(f"Chunked {len(elements)} elements -> {len(chunks)} documents with 5-field metadata")
     return chunks
 
 def get_section_chunks(elements: list[AbstractSemanticElement], section_type: type) -> list[Document]:

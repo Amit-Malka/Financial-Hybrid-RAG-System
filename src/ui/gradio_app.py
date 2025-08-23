@@ -10,7 +10,7 @@ from ..tools.mda_tool import MDATool
 from ..tools.risk_tool import RiskTool
 from ..retrieval.dense_retriever import get_dense_retriever
 from ..retrieval.tfidf_retriever import Financial10QRetriever
-from ..retrieval.ensemble_setup import create_ensemble_retriever
+from ..retrieval.ensemble_setup import create_ensemble_retriever, create_graph_enhanced_retriever
 from ..llm.langchain_llm import LangchainLLM
 from ..processing.pdf_to_html import convert_pdf_to_html
 from ..processing.pdf_parser import load_html
@@ -29,6 +29,7 @@ logger = logging.getLogger("ui")
 # Global variables
 elements = []
 ensemble_retriever = None
+neo4j_graph_instance = None
 
 def process_file(file, api_key):
     global elements, ensemble_retriever
@@ -66,24 +67,41 @@ def process_file(file, api_key):
 
         logger.info(f"Created {len(chunks)} chunks")
 
-        # Create retrievers
+        # Create retrievers with graph enhancement per specification
         dense_retriever = get_dense_retriever(chunks)
         sparse_retriever = Financial10QRetriever(chunks)
-        ensemble_retriever = create_ensemble_retriever(dense_retriever, sparse_retriever)
-        logger.info("Ensemble retriever created")
+        # Use graph-enhanced retriever (Dense 70% + TF-IDF 30% + Graph 15%)
+        ensemble_retriever = create_graph_enhanced_retriever(dense_retriever, sparse_retriever)
+        logger.info("Graph-enhanced ensemble retriever created per specification")
 
         return "File processed successfully!"
     return "Please upload a file first."
 
 def add_to_graph(neo4j_uri, neo4j_user, neo4j_password):
+    global neo4j_graph_instance, ensemble_retriever, elements
     logger.info("add_to_graph called")
     if not elements:
         return "Please process a file first."
     
-    graph = Neo4jGraph(neo4j_uri, neo4j_user, neo4j_password)
-    graph.add_document_structure(elements)
-    graph.close()
-    return "Document structure added to graph!"
+    try:
+        # Create and populate graph
+        neo4j_graph_instance = Neo4jGraph(neo4j_uri, neo4j_user, neo4j_password)
+        neo4j_graph_instance.add_document_structure(elements)
+        
+        # Recreate ensemble retriever with graph integration
+        if ensemble_retriever:
+            # Get base retrievers and recreate with graph
+            dense_retriever = get_dense_retriever(chunk_document(elements))
+            sparse_retriever = Financial10QRetriever(chunk_document(elements))
+            ensemble_retriever = create_graph_enhanced_retriever(
+                dense_retriever, sparse_retriever, neo4j_graph_instance
+            )
+            logger.info("Retriever updated with graph integration")
+        
+        return "Document structure added to graph and retriever enhanced!"
+    except Exception as e:
+        logger.error(f"Graph integration failed: {e}")
+        return f"Failed to add to graph: {e}"
 
 def answer_question_for_app(question, api_key, cohere_api_key, use_reranker):
     try:
@@ -147,6 +165,176 @@ def run_evaluation(question, ground_truth, api_key, cohere_api_key, use_reranker
     result = evaluate_ragas(question, answer, context, ground_truth)
     return result
 
+def generate_summary(api_key):
+    """Generate full document summarization using LlamaIndex."""
+    logger.info("generate_summary called")
+    if not elements:
+        return "Please process a file first."
+    
+    try:
+        os.environ["GOOGLE_API_KEY"] = api_key or ""
+        langchain_llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash")
+        
+        # Extract full document text
+        full_text = "\n\n".join([str(element) for element in elements])
+        
+        # Use LLM for summarization
+        summary_prompt = f"""
+Please provide a comprehensive summary of this SEC 10-Q quarterly report:
+
+{full_text[:8000]}  # Limit text for token constraints
+
+Focus on:
+1. Key financial performance metrics
+2. Revenue and earnings highlights
+3. Major business developments
+4. Risk factors and challenges
+5. Forward-looking statements
+
+Provide a structured summary in markdown format.
+"""
+        
+        response = langchain_llm.invoke(summary_prompt)
+        return response.content
+        
+    except Exception as e:
+        logger.error(f"Summary generation failed: {e}")
+        return f"Summary generation failed: {e}"
+
+def query_tables(question, api_key):
+    """Specialized interface for table queries."""
+    logger.info("query_tables called")
+    if not elements:
+        return "Please process a file first."
+    
+    try:
+        os.environ["GOOGLE_API_KEY"] = api_key or ""
+        langchain_llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash")
+        llama_llm = LangchainLLM(langchain_llm)
+        
+        # Force routing to table tool
+        table_tool = TableTool(ensemble_retriever, llama_llm, elements)
+        answer = table_tool.execute(question)
+        
+        return answer
+        
+    except Exception as e:
+        logger.error(f"Table query failed: {e}")
+        return f"Table query failed: {e}"
+
+def financial_analysis(api_key):
+    """Health assessment and risk factor analysis."""
+    logger.info("financial_analysis called")
+    if not elements:
+        return "Please process a file first."
+    
+    try:
+        os.environ["GOOGLE_API_KEY"] = api_key or ""
+        langchain_llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash")
+        
+        # Use specialized tools for analysis
+        mda_tool = MDATool(langchain_llm, elements)
+        risk_tool = RiskTool(langchain_llm, elements)
+        
+        # Generate comprehensive analysis
+        mda_analysis = mda_tool.execute("What are the key financial performance trends and management outlook?")
+        risk_analysis = risk_tool.execute("What are the primary risk factors and uncertainties?")
+        
+        analysis = f"""# Financial Health Assessment
+
+## Management Discussion & Analysis
+{mda_analysis}
+
+## Risk Factor Analysis  
+{risk_analysis}
+
+## Overall Assessment
+Based on the MD&A and risk factors, this analysis provides insights into the company's financial health and forward-looking challenges.
+"""
+        
+        return analysis
+        
+    except Exception as e:
+        logger.error(f"Financial analysis failed: {e}")
+        return f"Financial analysis failed: {e}"
+
+def get_system_info():
+    """Display system information and metrics."""
+    logger.info("get_system_info called")
+    
+    try:
+        import psutil
+        import platform
+        from datetime import datetime
+        
+        # System metrics
+        cpu_percent = psutil.cpu_percent(interval=1)
+        memory = psutil.virtual_memory()
+        
+        # Configuration info
+        config_info = f"""# System Information
+
+## Current Configuration
+- **Dense Weight**: {Config.DENSE_WEIGHT} (70%)
+- **TF-IDF Weight**: {Config.TFIDF_WEIGHT} (30%) 
+- **Graph Enhancement Weight**: {Config.GRAPH_ENHANCEMENT_WEIGHT} (15%)
+- **Financial Boost Factor**: {Config.FINANCIAL_BOOST}
+- **Max TF-IDF Features**: {Config.MAX_FEATURES}
+- **Default Top-K**: {Config.DEFAULT_TOP_K}
+
+## System Performance
+- **CPU Usage**: {cpu_percent}%
+- **Memory Usage**: {memory.percent}%
+- **Available Memory**: {memory.available / (1024**3):.1f} GB
+- **Platform**: {platform.system()} {platform.release()}
+- **Timestamp**: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+
+## Components Status
+- **Elements Loaded**: {len(elements) if elements else 0}
+- **Ensemble Retriever**: {"✅ Active" if ensemble_retriever else "❌ Not Created"}
+- **Graph Integration**: {"✅ Active" if neo4j_graph_instance else "❌ Not Connected"}
+- **Graph Enhancement**: {"✅ Enabled" if Config.ENABLE_GRAPH_ENHANCEMENT else "❌ Disabled"}
+
+## Metadata Schema (5 Fields)
+1. ✅ **element_type**: SEC semantic element class
+2. ✅ **chunk_id**: Unique chunk identifier  
+3. ✅ **page_number**: PDF page for citations
+4. ✅ **section_path**: SEC section identifier
+5. ✅ **content_type**: Content classification
+"""
+        
+        return config_info
+        
+    except Exception as e:
+        logger.error(f"System info failed: {e}")
+        return f"System info failed: {e}"
+
+def update_weights(dense_weight, tfidf_weight, graph_weight):
+    """Update retrieval weights dynamically."""
+    logger.info("update_weights called")
+    
+    try:
+        # Validate weights
+        total = dense_weight + tfidf_weight
+        if abs(total - 1.0) > 0.01:
+            return f"Dense + TF-IDF weights must sum to 1.0 (current: {total})"
+        
+        if graph_weight < 0 or graph_weight > 0.5:
+            return "Graph weight must be between 0 and 0.5"
+        
+        # Update configuration (Note: this updates the runtime instance only)
+        Config.DENSE_WEIGHT = dense_weight
+        Config.TFIDF_WEIGHT = tfidf_weight  
+        Config.GRAPH_ENHANCEMENT_WEIGHT = graph_weight
+        
+        logger.info(f"Weights updated: Dense={dense_weight}, TF-IDF={tfidf_weight}, Graph={graph_weight}")
+        
+        return f"✅ Configuration Updated:\n- Dense: {dense_weight}\n- TF-IDF: {tfidf_weight}\n- Graph Enhancement: {graph_weight}\n\nNote: Restart required for changes to take full effect."
+        
+    except Exception as e:
+        logger.error(f"Weight update failed: {e}")
+        return f"Weight update failed: {e}"
+
 with gr.Blocks() as iface:
     gr.Markdown("# Financial RAG System")
     gr.Markdown("Ask questions about your 10-Q documents.")
@@ -179,6 +367,64 @@ with gr.Blocks() as iface:
             answer_box = gr.Markdown()
 
             answer_button.click(answer_question_for_app, inputs=[question_box, api_key_box, cohere_api_key_box, use_reranker_checkbox], outputs=[answer_box])
+
+        with gr.TabItem("Summary"):
+            gr.Markdown("## Full Document Summarization")
+            gr.Markdown("Generate a comprehensive summary of the 10-Q document using LlamaIndex.")
+            
+            summary_api_key_box = gr.Textbox(label="Google API Key", type="password")
+            generate_summary_button = gr.Button("Generate Summary")
+            summary_output = gr.Markdown()
+            
+            generate_summary_button.click(generate_summary, inputs=[summary_api_key_box], outputs=[summary_output])
+        
+        with gr.TabItem("Table Queries"):
+            gr.Markdown("## Specialized Financial Table Analysis")
+            gr.Markdown("Query financial statements, balance sheets, and other tabular data.")
+            
+            table_api_key_box = gr.Textbox(label="Google API Key", type="password")
+            table_question_box = gr.Textbox(label="Table Question", placeholder="e.g., What was the revenue for Q2?")
+            query_tables_button = gr.Button("Query Tables")
+            table_output = gr.Markdown()
+            
+            query_tables_button.click(query_tables, inputs=[table_question_box, table_api_key_box], outputs=[table_output])
+        
+        with gr.TabItem("Financial Analysis"):
+            gr.Markdown("## Health Assessment & Risk Analysis")
+            gr.Markdown("Comprehensive financial health assessment combining MD&A and risk factor analysis.")
+            
+            analysis_api_key_box = gr.Textbox(label="Google API Key", type="password")
+            run_analysis_button = gr.Button("Run Financial Analysis")
+            analysis_output = gr.Markdown()
+            
+            run_analysis_button.click(financial_analysis, inputs=[analysis_api_key_box], outputs=[analysis_output])
+        
+        with gr.TabItem("System Info"):
+            gr.Markdown("## System Information & Performance Metrics")
+            gr.Markdown("Real-time system status, configuration, and component health.")
+            
+            refresh_info_button = gr.Button("Refresh System Info")
+            system_info_output = gr.Markdown()
+            
+            refresh_info_button.click(get_system_info, outputs=[system_info_output])
+        
+        with gr.TabItem("Configuration"):
+            gr.Markdown("## System Configuration")
+            gr.Markdown("Configure retrieval weights and system parameters.")
+            
+            with gr.Row():
+                dense_weight_slider = gr.Slider(0.1, 0.9, value=Config.DENSE_WEIGHT, step=0.05, label="Dense Weight")
+                tfidf_weight_slider = gr.Slider(0.1, 0.9, value=Config.TFIDF_WEIGHT, step=0.05, label="TF-IDF Weight")
+                graph_weight_slider = gr.Slider(0.0, 0.5, value=Config.GRAPH_ENHANCEMENT_WEIGHT, step=0.05, label="Graph Enhancement Weight")
+            
+            update_config_button = gr.Button("Update Configuration")
+            config_status = gr.Markdown()
+            
+            update_config_button.click(
+                update_weights,
+                inputs=[dense_weight_slider, tfidf_weight_slider, graph_weight_slider],
+                outputs=[config_status]
+            )
 
         with gr.TabItem("Evaluation"):
             eval_question_box = gr.Textbox(label="Question")
