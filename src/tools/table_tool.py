@@ -4,7 +4,7 @@ from langchain_core.language_models import BaseLanguageModel
 from llama_index.core.program import LLMTextCompletionProgram
 from llama_index.core.bridge.pydantic import BaseModel, Field
 from llama_index.core.output_parsers import PydanticOutputParser
-from sec_parser.semantic_elements.table_element import TableElement
+from sec_parser.semantic_elements.table_element.table_element import TableElement
 
 class TableAnswer(BaseModel):
     """Data model for a table answer."""

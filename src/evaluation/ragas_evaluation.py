@@ -6,9 +6,11 @@ from ragas.metrics import (
     context_precision,
 )
 from datasets import Dataset
+import logging
 
 def evaluate_ragas(question, answer, context, ground_truth):
     """Evaluates the RAG system using RAGAS."""
+    logger = logging.getLogger("evaluation.ragas")
     data = {
         "question": [question],
         "answer": [answer],
@@ -16,6 +18,7 @@ def evaluate_ragas(question, answer, context, ground_truth):
         "ground_truth": [ground_truth]
     }
     dataset = Dataset.from_dict(data)
+    logger.info("Starting RAGAS evaluation")
     result = evaluate(
         dataset=dataset,
         metrics=[
@@ -25,4 +28,5 @@ def evaluate_ragas(question, answer, context, ground_truth):
             context_precision,
         ],
     )
+    logger.info("Completed RAGAS evaluation")
     return result

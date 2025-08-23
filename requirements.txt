@@ -9,12 +9,14 @@ scikit-learn
 sentence-transformers
 langchain-community
 langchain-google-genai
-lama-index-readers-file
-lama-index-program-openai
-llamaindex-readers-llama-parse
+llama-index-readers-file
+llama-index-program-openai
+llama-index-readers-llama-parse
 ragas
 sec-parser
 beautifulsoup4
 cohere
 langchain-cohere
 PyMuPDF
+datasets
+pytest

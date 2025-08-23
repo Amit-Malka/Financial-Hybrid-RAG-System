@@ -47,3 +47,9 @@ class Config:
         ],
         "page_number": int
     }
+
+    # Logging configuration
+    LOG_DIR = "logs"
+    LOG_LEVEL = "DEBUG"  # One of: DEBUG, INFO, WARNING, ERROR
+    LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+    LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"

@@ -4,12 +4,13 @@ from langchain_core.language_models import BaseLanguageModel
 from ..retrieval.dense_retriever import get_dense_retriever
 from ..retrieval.tfidf_retriever import Financial10QRetriever
 from ..retrieval.ensemble_setup import create_ensemble_retriever
-from ..processing.chunker import get_section_chunks
-from sec_parser.semantic_elements.management_discussion_and_analysis_element import MDNAElement
+from ..processing.chunker import chunk_document, get_elements_in_section
 
 class MDATool(SimpleTool):
     def __init__(self, llm: BaseLanguageModel, elements: list):
-        mda_chunks = get_section_chunks(elements, MDNAElement)
+        # Use TopSectionTitle identifiers for MD&A in 10-Q: 'part1item2'
+        mda_elements = get_elements_in_section(elements, section_identifier="part1item2")
+        mda_chunks = chunk_document(mda_elements)
         dense_retriever = get_dense_retriever(mda_chunks)
         sparse_retriever = Financial10QRetriever(mda_chunks)
         retriever = create_ensemble_retriever(dense_retriever, sparse_retriever)
