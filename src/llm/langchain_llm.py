@@ -20,7 +20,13 @@ class LangchainLLM(LLM):
     def _complete(self, prompt: str, **kwargs: Any) -> str:
         with llm_completion_callback():
             response = self._llm.invoke(prompt)
-            return response.content
+            # Handle different response types from LangChain LLMs
+            if hasattr(response, 'content'):
+                return response.content
+            elif hasattr(response, 'text'):
+                return response.text
+            else:
+                return str(response)
 
     def _stream_complete(self, prompt: str, **kwargs: Any):
         # Not implemented

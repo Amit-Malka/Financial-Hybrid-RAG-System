@@ -18,13 +18,20 @@ class SimpleTool:
         start = time.perf_counter()
         try:
             response = self.llm.invoke(prompt)
-        except Exception:
-            self.logger.exception("LLM invocation failed")
-            raise
+        except Exception as e:
+            self.logger.exception(f"LLM invocation failed with error: {e}")
+            raise RuntimeError(f"LLM invocation failed: {str(e)}") from e
         finally:
             self.logger.debug(f"LLM invocation took {time.perf_counter() - start:.2f}s")
+        
+        # Handle different response types from various LLM implementations
         try:
-            # Handle Chat-like results returning an object with 'content'
-            return getattr(response, "content", str(response))
-        except Exception:
+            if hasattr(response, "content"):
+                return response.content
+            elif hasattr(response, "text"):
+                return response.text
+            else:
+                return str(response)
+        except Exception as e:
+            self.logger.warning(f"Failed to extract response content: {e}")
             return str(response)
