@@ -123,14 +123,14 @@ def answer_question_and_context(question, api_key, cohere_api_key, use_reranker)
         os.environ["GOOGLE_API_KEY"] = api_key or ""
 
         logger.debug("Initializing ChatGoogleGenerativeAI model")
-        langchain_llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash")
+        langchain_llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite")
         llama_llm = LangchainLLM(langchain_llm)
 
         retriever = ensemble_retriever
         if use_reranker:
             logger.debug("Enabling Cohere reranker")
             os.environ["COHERE_API_KEY"] = cohere_api_key or ""
-            reranker = CohereRerank()
+            reranker = CohereRerank(model="rerank-english-v3.0")
             retriever = ContextualCompressionRetriever(
                 base_compressor=reranker, base_retriever=ensemble_retriever
             )
@@ -151,10 +151,23 @@ def answer_question_and_context(question, api_key, cohere_api_key, use_reranker)
 
         tool_name = route_query(question)
         tool = tools[tool_name]
-        logger.debug(f"Routing to tool: {tool_name}")
+        logger.info(f"ROUTING: Question '{question}' routed to tool: {tool_name}")
+        
+        # Execute tool and get answer
         answer = tool.execute(question)
+        
+        # Get context documents for additional logging
         context = retriever.get_relevant_documents(question)
-        logger.debug(f"Retrieved {len(context)} context docs")
+        logger.info(f"RETRIEVAL_SUMMARY: Retrieved {len(context)} context documents for UI logging")
+        
+        # ENHANCED CONTEXT LOGGING: Log all context chunks with metadata
+        for i, doc in enumerate(context):
+            chunk_preview = doc.page_content[:150].replace('\n', ' ')  # First 150 chars
+            metadata_summary = {k: v for k, v in doc.metadata.items()}
+            logger.info(f"UI_CONTEXT_CHUNK {i+1}/{len(context)}: {metadata_summary}")
+            logger.info(f"UI_CONTENT_PREVIEW: {chunk_preview}...")
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(f"UI_FULL_CONTENT_{i+1}: {doc.page_content}")
         return answer, context
     except Exception:
         logger.exception("answer_question_and_context failed")

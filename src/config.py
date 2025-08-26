@@ -16,7 +16,10 @@ class Config:
         'quarterly', 'interim', 'unaudited', 'condensed',
         'yoy', 'quarter_over_quarter', 'guidance', 'outlook',
         # SEC specific
-        'md_a', 'risk_factors', 'forward_looking', 'material'
+        'md_a', 'risk_factors', 'forward_looking', 'material',
+        # Monetization metrics
+        'cost_per_click', 'paid_clicks', 'impressions', 'monetization',
+        'cost_per_impression', 'click_through_rate', 'advertising'
     }
     
     # Simple TF-IDF settings
@@ -24,7 +27,9 @@ class Config:
     FINANCIAL_BOOST = 2.0
     
     # Tools routing keywords
-    TABLE_KEYWORDS = ['revenue', 'income', 'balance', 'cash_flow', 'financial_statement']
+    TABLE_KEYWORDS = ['revenue', 'income', 'balance', 'cash_flow', 'financial_statement', 
+                     'cost-per-click', 'cost_per_click', 'paid_clicks', 'paid clicks', 
+                     'click', 'clicks', 'impressions', 'cost-per-impression', 'monetization']
     RISK_KEYWORDS = ['risk', 'uncertainty', 'factor', 'may_adversely']
     MDA_KEYWORDS = ['management', 'discussion', 'analysis', 'outlook', 'results']
     

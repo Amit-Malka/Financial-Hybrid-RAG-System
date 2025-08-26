@@ -22,9 +22,100 @@ def chunk_document(elements: list[AbstractSemanticElement]) -> list[Document]:
         content_type = getattr(element, "content_type", None)
         if content_type is not None:
             metadata["content_type"] = content_type
-        chunks.append(Document(page_content=str(element), metadata=metadata))
+        
+        # ENHANCED CONTENT EXTRACTION: Try multiple methods to get actual text content
+        text_content = extract_element_text(element)
+        
+        # Log content extraction for debugging
+        if len(text_content.strip()) < 10:
+            logger.warning(f"Element {i} ({element.__class__.__name__}) has minimal content: '{text_content[:50]}...'")
+        
+        chunks.append(Document(page_content=text_content, metadata=metadata))
     logger.info(f"Chunked {len(elements)} elements -> {len(chunks)} documents with 5-field metadata")
     return chunks
+
+def extract_element_text(element: AbstractSemanticElement) -> str:
+    """Extract actual text content from SEC parser elements using multiple fallback methods."""
+    
+    # Method 1: Try .text attribute
+    if hasattr(element, 'text') and element.text:
+        text = str(element.text).strip()
+        if text:
+            return text
+    
+    # Method 2: Try .content attribute
+    if hasattr(element, 'content') and element.content:
+        text = str(element.content).strip()
+        if text:
+            return text
+    
+    # Method 3: Try .inner_text attribute
+    if hasattr(element, 'inner_text') and element.inner_text:
+        text = str(element.inner_text).strip()
+        if text:
+            return text
+    
+    # Method 4: Try .get_text() method
+    if hasattr(element, 'get_text'):
+        try:
+            text = str(element.get_text()).strip()
+            if text:
+                return text
+        except Exception:
+            pass
+    
+    # Method 5: Try to access underlying HTML and extract text
+    if hasattr(element, 'html_tag') and element.html_tag:
+        try:
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(str(element.html_tag), 'html.parser')
+            text = soup.get_text().strip()
+            if text:
+                return text
+        except Exception:
+            pass
+    
+    # Method 6: Check for html attribute and extract text
+    if hasattr(element, 'html') and element.html:
+        try:
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(str(element.html), 'html.parser')
+            text = soup.get_text().strip()
+            if text:
+                return text
+        except Exception:
+            pass
+    
+    # Method 7: Try accessing the raw HTML content if available
+    for attr_name in ['_html', 'raw_html', 'source_html']:
+        if hasattr(element, attr_name):
+            try:
+                html_content = getattr(element, attr_name)
+                if html_content:
+                    from bs4 import BeautifulSoup
+                    soup = BeautifulSoup(str(html_content), 'html.parser')
+                    text = soup.get_text().strip()
+                    if text:
+                        return text
+            except Exception:
+                pass
+    
+    # Method 8: Fallback to string representation
+    fallback_text = str(element).strip()
+    
+    # If the string representation is just the class name, try to find any text attributes
+    if len(fallback_text) < 50 or fallback_text.startswith(element.__class__.__name__):
+        # Look for any attribute that might contain text
+        for attr in dir(element):
+            if not attr.startswith('_') and attr not in ['html_tag', 'html']:
+                try:
+                    value = getattr(element, attr)
+                    if isinstance(value, str) and len(value.strip()) > 10:
+                        return value.strip()
+                except Exception:
+                    pass
+    
+    return fallback_text
 
 def get_section_chunks(elements: list[AbstractSemanticElement], section_type: type) -> list[Document]:
     """Gets chunked Documents for a specific section type."""

@@ -1,7 +1,11 @@
+from llama_index.core.llms import ChatMessage
+from llama_index.core.base.llms.types import CompletionResponse
+from llama_index.core.base.llms.types import CompletionResponseGen
+
 try:
     from llama_index.core.llms import LLM
     from llama_index.core.llms.callbacks import llm_completion_callback
-    from llama_index.core.llms.types import (
+    from llama_index.core.llms.utils import (
         CompletionResponse,
         CompletionResponseGen,
         ChatMessage,
@@ -13,8 +17,8 @@ except ImportError:
     # Fallback imports for different LlamaIndex versions
     try:
         from llama_index.llms import LLM
-        from llama_index.llms.callbacks import llm_completion_callback
-        from llama_index.llms.types import (
+        from llama_index.core.llms.callbacks import llm_completion_callback
+        from llama_index.core.base.llms.types import (
             CompletionResponse,
             CompletionResponseGen,
             ChatMessage,
@@ -57,10 +61,28 @@ from langchain_core.language_models import BaseLanguageModel
 from typing import Any, List, Optional, Iterable, AsyncIterable
 import asyncio
 
+class LLMMetadata:
+    """Metadata class for LlamaIndex LLM compatibility."""
+    def __init__(self, is_chat_model: bool = True, **kwargs):
+        self.is_chat_model = is_chat_model
+        self.model_name = kwargs.get('model_name', 'langchain_wrapped_model')
+        self.context_window = kwargs.get('context_window', 4096)
+        self.num_output = kwargs.get('num_output', 512)
+        # Add other metadata attributes as needed
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
 class LangchainLLM(LLM):
     def __init__(self, llm: BaseLanguageModel):
         super().__init__()
         self._llm = llm
+        # Create proper metadata object for LlamaIndex compatibility
+        self._metadata = LLMMetadata(
+            is_chat_model=True,  # Most modern LLMs are chat models
+            model_name=getattr(llm, 'model_name', 'langchain_wrapped_model'),
+            context_window=getattr(llm, 'context_window', 4096),
+            num_output=getattr(llm, 'num_output', 512)
+        )
 
     def _complete(self, prompt: str, **kwargs: Any) -> str:
         with llm_completion_callback():
@@ -137,7 +159,23 @@ class LangchainLLM(LLM):
             for c in resp.message.content.splitlines():
                 yield ChatResponse(message=ChatMessage(role=MessageRole.ASSISTANT, content=c))
         return agen()
+    
+    # Additional LlamaIndex compatibility methods
+    @property
+    def system_prompt(self):
+        """System prompt for the LLM."""
+        return getattr(self._llm, 'system_prompt', None)
+    
+    def set_system_prompt(self, system_prompt: str):
+        """Set system prompt for the LLM."""
+        if hasattr(self._llm, 'set_system_prompt'):
+            self._llm.set_system_prompt(system_prompt)
+    
+    @property 
+    def class_name(self) -> str:
+        """Get class name for LlamaIndex."""
+        return self.__class__.__name__
 
     @property
     def metadata(self):
-        return {}
+        return self._metadata

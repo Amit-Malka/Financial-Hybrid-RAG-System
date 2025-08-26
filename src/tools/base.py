@@ -11,8 +11,18 @@ class SimpleTool:
     
     def execute(self, query: str) -> str:
         # Simple: retrieve → generate → return
-        self.logger.info("Executing tool")
+        self.logger.info(f"Executing tool for query: {query}")
         context = self.retriever.get_relevant_documents(query)
+        
+        # ENHANCED LOGGING: Log all retrieved chunks with detailed metadata
+        self.logger.info(f"Retrieved {len(context)} chunks for query: '{query}'")
+        for i, doc in enumerate(context):
+            chunk_preview = doc.page_content[:200].replace('\n', ' ')  # First 200 chars
+            metadata_info = {k: v for k, v in doc.metadata.items()}  # All metadata
+            self.logger.info(f"CHUNK {i+1}/{len(context)}: {metadata_info}")
+            self.logger.info(f"CONTENT_PREVIEW: {chunk_preview}...")
+            self.logger.debug(f"FULL_CONTENT_{i+1}: {doc.page_content}")
+        
         context_text = "\n\n".join([doc.page_content for doc in context])
         prompt = f"Context: {context_text}\n\nQuestion: {query}"
         start = time.perf_counter()
