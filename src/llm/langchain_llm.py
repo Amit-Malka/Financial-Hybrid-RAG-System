@@ -1,11 +1,7 @@
-from llama_index.core.llms import ChatMessage
-from llama_index.core.base.llms.types import CompletionResponse
-from llama_index.core.base.llms.types import CompletionResponseGen
-
 try:
     from llama_index.core.llms import LLM
     from llama_index.core.llms.callbacks import llm_completion_callback
-    from llama_index.core.llms.utils import (
+    from llama_index.core.base.llms.types import (
         CompletionResponse,
         CompletionResponseGen,
         ChatMessage,
@@ -14,48 +10,17 @@ try:
         MessageRole,
     )
 except ImportError:
-    # Fallback imports for different LlamaIndex versions
-    try:
-        from llama_index.llms import LLM
-        from llama_index.core.llms.callbacks import llm_completion_callback
-        from llama_index.core.base.llms.types import (
-            CompletionResponse,
-            CompletionResponseGen,
-            ChatMessage,
-            ChatResponse,
-            ChatResponseGen,
-            MessageRole,
-        )
-    except ImportError:
-        # Ultimate fallback - create minimal implementations
-        from abc import ABC, abstractmethod
-        
-        class LLM(ABC):
-            def __init__(self):
-                pass
-        
-        class CompletionResponse:
-            def __init__(self, text: str):
-                self.text = text
-        
-        class ChatMessage:
-            def __init__(self, role, content: str):
-                self.role = role
-                self.content = content
-        
-        class ChatResponse:
-            def __init__(self, message):
-                self.message = message
-        
-        class MessageRole:
-            ASSISTANT = "assistant"
-        
-        def llm_completion_callback():
-            from contextlib import nullcontext
-            return nullcontext()
-        
-        CompletionResponseGen = None
-        ChatResponseGen = None
+    # Fallback for older LlamaIndex package layout
+    from llama_index.llms import LLM
+    from llama_index.core.llms.callbacks import llm_completion_callback
+    from llama_index.core.base.llms.types import (
+        CompletionResponse,
+        CompletionResponseGen,
+        ChatMessage,
+        ChatResponse,
+        ChatResponseGen,
+        MessageRole,
+    )
 
 from langchain_core.language_models import BaseLanguageModel
 from typing import Any, List, Optional, Iterable, AsyncIterable
@@ -85,19 +50,43 @@ class LangchainLLM(LLM):
         )
 
     def _complete(self, prompt: str, **kwargs: Any) -> str:
-        with llm_completion_callback():
-            response = self._llm.invoke(prompt)
-            # Handle different response types from LangChain LLMs
-            if hasattr(response, 'content'):
-                return response.content
-            elif hasattr(response, 'text'):
-                return response.text
-            else:
-                return str(response)
+        # Remove the context manager entirely
+        response = self._llm.invoke(prompt)
+        # Handle different response types from LangChain LLMs
+        if hasattr(response, 'content'):
+            return response.content
+        elif hasattr(response, 'text'):
+            return response.text
+        else:
+            return (response)
 
     def _stream_complete(self, prompt: str, **kwargs: Any):
-        # Not implemented
-        yield self._complete(prompt, **kwargs)
+        """Stream completion chunks from the underlying LangChain LLM if supported.
+
+        Falls back to yielding the full completion once if streaming is not available.
+        """
+        with llm_completion_callback():
+            # Prefer native streaming if the underlying LLM supports it
+            if hasattr(self._llm, "stream") and callable(getattr(self._llm, "stream")):
+                try:
+                    for chunk in self._llm.stream(prompt):
+                        if chunk is None:
+                            continue
+                        # LangChain message chunks commonly expose `content` or `text`
+                        if hasattr(chunk, "content") and chunk.content:
+                            yield chunk.content
+                        elif hasattr(chunk, "text") and chunk.text:
+                            yield chunk.text
+                        else:
+                            # Last resort, stringify the chunk
+                            yield str(chunk)
+                    return
+                except Exception:
+                    # If native streaming fails, fall back to non-streaming once
+                    pass
+
+            # Fallback: non-streaming single chunk
+            yield self._complete(prompt, **kwargs)
 
     # Required abstract methods (sync)
     def complete(self, prompt: str, **kwargs: Any) -> CompletionResponse:
@@ -127,8 +116,14 @@ class LangchainLLM(LLM):
             # Fallback for missing types
             yield self.chat(messages, **kwargs)
         else:
-            for c in self.chat(messages, **kwargs).message.content.splitlines():
-                yield ChatResponse(message=ChatMessage(role=MessageRole.ASSISTANT, content=c))
+            # Flatten messages and stream using the same mechanism as completion
+            prompt_parts = []
+            for m in messages:
+                role = m.role.value if hasattr(m.role, "value") else str(m.role)
+                prompt_parts.append(f"{role}: {m.content}")
+            prompt = "\n".join(prompt_parts)
+            for chunk in self._stream_complete(prompt, **kwargs):
+                yield ChatResponse(message=ChatMessage(role=MessageRole.ASSISTANT, content=str(chunk)))
 
     # Async variants
     async def acomplete(self, prompt: str, **kwargs: Any) -> CompletionResponse:
@@ -137,11 +132,31 @@ class LangchainLLM(LLM):
         return CompletionResponse(text=text)
 
     async def astream_complete(self, prompt: str, **kwargs: Any):
-        # Simple non-streaming async fallback
-        resp = await self.acomplete(prompt, **kwargs)
-        async def agen():
-            yield resp
-        return agen()
+        # Prefer native async streaming if supported by the underlying LLM
+        if hasattr(self._llm, "astream") and callable(getattr(self._llm, "astream")):
+            async def agen():
+                try:
+                    async for chunk in self._llm.astream(prompt):
+                        if chunk is None:
+                            continue
+                        if hasattr(chunk, "content") and chunk.content:
+                            yield CompletionResponse(text=str(chunk.content))
+                        elif hasattr(chunk, "text") and chunk.text:
+                            yield CompletionResponse(text=str(chunk.text))
+                        else:
+                            yield CompletionResponse(text=str(chunk))
+                except Exception:
+                    # Fall back to single completion on error
+                    loop = asyncio.get_running_loop()
+                    text = await loop.run_in_executor(None, self._complete, prompt)
+                    yield CompletionResponse(text=text)
+            return agen()
+        else:
+            # Simple non-streaming async fallback
+            resp = await self.acomplete(prompt, **kwargs)
+            async def agen():
+                yield resp
+            return agen()
 
     async def achat(self, messages: List[ChatMessage], **kwargs: Any) -> ChatResponse:
         loop = asyncio.get_running_loop()
@@ -154,10 +169,16 @@ class LangchainLLM(LLM):
         return ChatResponse(message=ChatMessage(role=MessageRole.ASSISTANT, content=text))
 
     async def astream_chat(self, messages: List[ChatMessage], **kwargs: Any):
-        resp = await self.achat(messages, **kwargs)
+        # Stream chat by flattening messages into a prompt and reusing astream_complete
+        prompt_parts = []
+        for m in messages:
+            role = m.role.value if hasattr(m.role, "value") else str(m.role)
+            prompt_parts.append(f"{role}: {m.content}")
+        prompt = "\n".join(prompt_parts)
+
         async def agen():
-            for c in resp.message.content.splitlines():
-                yield ChatResponse(message=ChatMessage(role=MessageRole.ASSISTANT, content=c))
+            async for resp in await self.astream_complete(prompt, **kwargs):
+                yield ChatResponse(message=ChatMessage(role=MessageRole.ASSISTANT, content=resp.text))
         return agen()
     
     # Additional LlamaIndex compatibility methods

@@ -32,6 +32,18 @@ elements = []
 ensemble_retriever = None
 neo4j_graph_instance = None
 
+def clear_global_state():
+    """Clear global state and close any active resources."""
+    global elements, ensemble_retriever, neo4j_graph_instance
+    elements = []
+    ensemble_retriever = None
+    if neo4j_graph_instance:
+        try:
+            neo4j_graph_instance.close()
+        except Exception:
+            logger.warning("Failed to close Neo4j graph instance during cleanup")
+        neo4j_graph_instance = None
+
 def process_file(file, api_key):
     global elements, ensemble_retriever
     logger.info("process_file called")
@@ -120,7 +132,9 @@ def answer_question_and_context(question, api_key, cohere_api_key, use_reranker)
 
         logger.debug(f"use_reranker={use_reranker}")
         logger.debug(f"GOOGLE_API_KEY provided={'yes' if bool(api_key) else 'no'}")
-        os.environ["GOOGLE_API_KEY"] = api_key or ""
+        # Set key in environment for the model client only at call sites
+        if api_key:
+            os.environ["GOOGLE_API_KEY"] = api_key
 
         logger.debug("Initializing ChatGoogleGenerativeAI model")
         langchain_llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite")
@@ -129,7 +143,8 @@ def answer_question_and_context(question, api_key, cohere_api_key, use_reranker)
         retriever = ensemble_retriever
         if use_reranker:
             logger.debug("Enabling Cohere reranker")
-            os.environ["COHERE_API_KEY"] = cohere_api_key or ""
+            if cohere_api_key:
+                os.environ["COHERE_API_KEY"] = cohere_api_key
             reranker = CohereRerank(model="rerank-english-v3.0")
             retriever = ContextualCompressionRetriever(
                 base_compressor=reranker, base_retriever=ensemble_retriever
@@ -186,11 +201,17 @@ def generate_summary(api_key):
         return "Please process a file first."
     
     try:
-        os.environ["GOOGLE_API_KEY"] = api_key or ""
+        if api_key:
+            os.environ["GOOGLE_API_KEY"] = api_key
         langchain_llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash")
         
-        # Extract full document text
-        full_text = "\n\n".join([str(element) for element in elements])
+        # Use chunked document content (actual text) instead of element tag strings
+        chunks = chunk_document(elements)
+        # Concatenate chunk contents; filter out empty/minimal pages to avoid noise
+        chunk_texts = [doc.page_content.strip() for doc in chunks if doc.page_content and len(doc.page_content.strip()) > 0]
+        if not chunk_texts:
+            logger.warning("No chunk text extracted; summary may be empty")
+        full_text = "\n\n".join(chunk_texts)
         
         # Use LLM for summarization
         summary_prompt = f"""
@@ -222,7 +243,8 @@ def query_tables(question, api_key):
         return "Please process a file first."
     
     try:
-        os.environ["GOOGLE_API_KEY"] = api_key or ""
+        if api_key:
+            os.environ["GOOGLE_API_KEY"] = api_key
         langchain_llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash")
         llama_llm = LangchainLLM(langchain_llm)
         
@@ -243,7 +265,8 @@ def financial_analysis(api_key):
         return "Please process a file first."
     
     try:
-        os.environ["GOOGLE_API_KEY"] = api_key or ""
+        if api_key:
+            os.environ["GOOGLE_API_KEY"] = api_key
         langchain_llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash")
         
         # Use specialized tools for analysis
@@ -421,6 +444,12 @@ with gr.Blocks() as iface:
             system_info_output = gr.Markdown()
             
             refresh_info_button.click(get_system_info, outputs=[system_info_output])
+            
+            # Add maintenance controls
+            gr.Markdown("### Maintenance")
+            cleanup_button = gr.Button("Clear Global State")
+            cleanup_status = gr.Label()
+            cleanup_button.click(lambda: (clear_global_state(), "State cleared")[1], outputs=[cleanup_status])
         
         with gr.TabItem("Configuration"):
             gr.Markdown("## System Configuration")

@@ -65,3 +65,20 @@ class Config:
     LOG_LEVEL = "DEBUG"  # One of: DEBUG, INFO, WARNING, ERROR
     LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
     LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+    @classmethod
+    def validate(cls):
+        """Validate configuration values and constraints.
+
+        - Dense + TF-IDF must sum to 1.0 (±0.01)
+        - Graph enhancement weight must be within [0.0, 0.5]
+        - Chunk sizes must be positive and overlap less than size
+        """
+        if abs(cls.DENSE_WEIGHT + cls.TFIDF_WEIGHT - 1.0) > 0.01:
+            raise ValueError("DENSE_WEIGHT + TFIDF_WEIGHT must equal 1.0")
+        if cls.GRAPH_ENHANCEMENT_WEIGHT < 0.0 or cls.GRAPH_ENHANCEMENT_WEIGHT > 0.5:
+            raise ValueError("GRAPH_ENHANCEMENT_WEIGHT must be between 0.0 and 0.5")
+        if cls.CHUNK_SIZE <= 0:
+            raise ValueError("CHUNK_SIZE must be positive")
+        if cls.CHUNK_OVERLAP < 0 or cls.CHUNK_OVERLAP >= cls.CHUNK_SIZE:
+            raise ValueError("CHUNK_OVERLAP must be >= 0 and < CHUNK_SIZE")

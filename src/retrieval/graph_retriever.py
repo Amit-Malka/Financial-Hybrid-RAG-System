@@ -91,17 +91,60 @@ class GraphEnhancedRetriever(BaseRetriever):
     def _get_sequential_neighbors(self, chunk_id: str) -> List[Document]:
         """Get sequential neighbor chunks using NEXT relationships."""
         try:
-            # This is a simplified implementation since we have basic Neo4j integration
-            # In a full implementation, this would query Neo4j for NEXT relationships
-            return []
-        except Exception:
+            if not self.neo4j_graph or not getattr(self.neo4j_graph, "driver", None):
+                return []
+            with self.neo4j_graph.driver.session() as session:
+                result = session.run(
+                    """
+                    MATCH (e1:Element {chunk_id: $chunk_id})-[:NEXT]->(e2:Element)
+                    RETURN e2.chunk_id as chunk_id, e2.text as content, e2.page_number as page_number,
+                           e2.section_path as section_path, e2.type as element_type, e2.content_type as content_type
+                    """,
+                    chunk_id=chunk_id,
+                )
+                neighbors: List[Document] = []
+                for record in result:
+                    metadata = {
+                        "chunk_id": record.get("chunk_id"),
+                        "page_number": record.get("page_number"),
+                        "section_path": record.get("section_path"),
+                        "content_type": record.get("content_type"),
+                        "element_type": record.get("element_type"),
+                    }
+                    neighbors.append(Document(page_content=record.get("content") or "", metadata={k: v for k, v in metadata.items() if v is not None}))
+                return neighbors
+        except Exception as e:
+            self._logger.warning(f"Neo4j NEXT query failed: {e}")
             return []
     
     def _get_section_documents(self, section_path: str) -> List[Document]:
         """Get related documents from the same section."""
         try:
-            # This is a simplified implementation
-            # In a full implementation, this would query Neo4j for section-related chunks
-            return []
-        except Exception:
+            if not section_path:
+                return []
+            if not self.neo4j_graph or not getattr(self.neo4j_graph, "driver", None):
+                return []
+            with self.neo4j_graph.driver.session() as session:
+                result = session.run(
+                    """
+                    MATCH (e:Element {section_path: $section_path})
+                    RETURN e.chunk_id as chunk_id, e.text as content, e.page_number as page_number,
+                           e.section_path as section_path, e.type as element_type, e.content_type as content_type
+                    LIMIT 25
+                    """,
+                    section_path=section_path,
+                )
+                docs: List[Document] = []
+                for record in result:
+                    metadata = {
+                        "chunk_id": record.get("chunk_id"),
+                        "page_number": record.get("page_number"),
+                        "section_path": record.get("section_path"),
+                        "content_type": record.get("content_type"),
+                        "element_type": record.get("element_type"),
+                    }
+                    docs.append(Document(page_content=record.get("content") or "", metadata={k: v for k, v in metadata.items() if v is not None}))
+                return docs
+        except Exception as e:
+            self._logger.warning(f"Neo4j section query failed: {e}")
             return []
