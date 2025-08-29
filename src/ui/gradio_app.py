@@ -318,37 +318,54 @@ def financial_analysis(api_key):
     logger.info("financial_analysis called")
     if not elements:
         return "Please process a file first."
-    
+
     try:
         if api_key:
             os.environ["GOOGLE_API_KEY"] = api_key
-        langchain_llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash")
-        
-        # Use specialized tools for analysis
+        langchain_llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite")
+
+        # Use specialized tools for analysis with improved fallback
         mda_tool = MDATool(langchain_llm, elements)
         risk_tool = RiskTool(langchain_llm, elements)
-        
-        # Generate comprehensive analysis
-        mda_analysis = mda_tool.execute("What are the key financial performance trends and management outlook?")
-        risk_analysis = risk_tool.execute("What are the primary risk factors and uncertainties?")
-        
+
+        logger.info("Starting specialized financial analysis with improved tools")
+
+        # Generate comprehensive analysis with specific queries
+        try:
+            mda_analysis = mda_tool.execute("What are the key financial performance trends and management outlook? Include revenue growth, profitability metrics, operating margins, and forward-looking statements from management.")
+            logger.info("MD&A analysis completed successfully")
+        except Exception as e:
+            logger.error(f"MD&A analysis failed: {e}")
+            mda_analysis = f"MD&A analysis unavailable: {str(e)}"
+
+        try:
+            risk_analysis = risk_tool.execute("What are the primary risk factors and uncertainties facing the company? Include contractual obligations, pending acquisitions, regulatory risks, and market challenges.")
+            logger.info("Risk analysis completed successfully")
+        except Exception as e:
+            logger.error(f"Risk analysis failed: {e}")
+            risk_analysis = f"Risk analysis unavailable: {str(e)}"
+
+        # Create comprehensive analysis
         analysis = f"""# Financial Health Assessment
 
 ## Management Discussion & Analysis
 {mda_analysis}
 
-## Risk Factor Analysis  
+## Risk Factor Analysis
 {risk_analysis}
 
 ## Overall Assessment
-Based on the MD&A and risk factors, this analysis provides insights into the company's financial health and forward-looking challenges.
+This analysis combines management's discussion of financial performance with identified risk factors to provide a comprehensive view of the company's financial health and forward-looking challenges. The analysis uses specialized retrieval tools optimized for financial document understanding.
+
+*Generated using enhanced financial analysis tools with intelligent fallback mechanisms*
 """
-        
+
+        logger.info("Financial analysis completed successfully")
         return analysis
-        
+
     except Exception as e:
         logger.error(f"Financial analysis failed: {e}")
-        return f"Financial analysis failed: {e}"
+        return f"Financial analysis failed: {e}\n\nPlease check:\n1. Google API key is valid\n2. Document is properly processed\n3. Internet connection is stable"
 
 def get_system_info():
     """Display system information and metrics."""
