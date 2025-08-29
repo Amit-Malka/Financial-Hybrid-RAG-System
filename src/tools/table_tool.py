@@ -5,6 +5,7 @@ from llama_index.core.program import LLMTextCompletionProgram
 from llama_index.core.bridge.pydantic import BaseModel, Field
 from llama_index.core.output_parsers import PydanticOutputParser
 from sec_parser.semantic_elements.table_element.table_element import TableElement
+import logging
 
 class TableAnswer(BaseModel):
     """Data model for a table answer."""
@@ -12,7 +13,27 @@ class TableAnswer(BaseModel):
 
 class TableTool(SimpleTool):
     def __init__(self, retriever: BaseRetriever, llm: BaseLanguageModel, elements: list):
-        super().__init__(retriever, llm)
+        logger = logging.getLogger("tools.table")
+
+        # If retriever passed, use it directly (current behavior)
+        if retriever:
+            super().__init__(retriever, llm)
+        else:
+            # Create specialized financial table retriever
+            table_elements = self._filter_by_financial_keywords(elements)
+            from ..processing.chunker import chunk_document
+            from ..retrieval.dense_retriever import get_dense_retriever
+            from ..retrieval.tfidf_retriever import Financial10QRetriever
+            from ..retrieval.ensemble_setup import create_ensemble_retriever
+
+            table_chunks = chunk_document(table_elements)
+            logger.info(f"TableTool initialized with {len(table_chunks)} chunks")
+
+            dense_retriever = get_dense_retriever(table_chunks)
+            sparse_retriever = Financial10QRetriever(table_chunks)
+            specialized_retriever = create_ensemble_retriever(dense_retriever, sparse_retriever)
+            super().__init__(specialized_retriever, llm)
+
         self.elements = elements
         self.program = LLMTextCompletionProgram.from_defaults(
             output_parser=PydanticOutputParser(output_cls=TableAnswer),
@@ -71,3 +92,20 @@ class TableTool(SimpleTool):
         # Use LlamaIndex program with financial context instead of table
         response = self.program(table_str=combined_context, query_str=query)
         return response.answer
+
+    def _filter_by_financial_keywords(self, elements):
+        """Filter elements that likely contain financial data and tables."""
+        financial_keywords = [
+            "revenue", "income", "earnings", "balance sheet", "cash flow",
+            "assets", "liabilities", "equity", "financial statements",
+            "consolidated", "thousands", "millions", "$", "net income",
+            "total revenue", "operating income", "comprehensive income"
+        ]
+
+        filtered_elements = []
+        for element in elements:
+            text_content = str(element).lower()
+            if any(keyword in text_content for keyword in financial_keywords):
+                filtered_elements.append(element)
+
+        return filtered_elements

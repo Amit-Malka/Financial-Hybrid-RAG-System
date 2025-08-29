@@ -3,25 +3,7 @@ import os
 import shutil
 import logging
 from ..logging_setup import initialize_logging
-from ..tools.router import route_query
-from ..tools.general_tool import GeneralTool
-from ..tools.table_tool import TableTool
-from ..tools.mda_tool import MDATool
-from ..tools.risk_tool import RiskTool
-from ..retrieval.dense_retriever import get_dense_retriever
-from ..retrieval.tfidf_retriever import Financial10QRetriever
-from ..retrieval.ensemble_setup import create_ensemble_retriever, create_graph_enhanced_retriever
-from ..llm.langchain_llm import LangchainLLM
-from ..processing.pdf_to_html import convert_pdf_to_html
-from ..processing.pdf_parser import load_html
-from ..processing.chunker import chunk_document
-from ..graph.neo4j_graph import Neo4jGraph
-from ..evaluation.ragas_evaluation import evaluate_ragas
 from ..config import Config
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.documents import Document
-from langchain.retrievers.contextual_compression import ContextualCompressionRetriever
-from langchain_cohere import CohereRerank
 
 # Initialize logging for UI component
 initialize_logging(component_name="ui")
@@ -47,6 +29,15 @@ def clear_global_state():
 def process_file(file, api_key):
     global elements, ensemble_retriever
     logger.info("process_file called")
+
+    # Import heavy libraries only when needed
+    from ..processing.pdf_to_html import convert_pdf_to_html
+    from ..processing.pdf_parser import load_html
+    from ..processing.chunker import chunk_document
+    from ..retrieval.dense_retriever import get_dense_retriever
+    from ..retrieval.tfidf_retriever import Financial10QRetriever
+    from ..retrieval.ensemble_setup import create_graph_enhanced_retriever
+
     if file is not None:
         # Determine source path (supports gradio file object or direct filepath)
         src_path = file if isinstance(file, str) else getattr(file, "name", None)
@@ -95,12 +86,19 @@ def add_to_graph(neo4j_uri, neo4j_user, neo4j_password):
     logger.info("add_to_graph called")
     if not elements:
         return "Please process a file first."
-    
+
     try:
+        # Import heavy libraries only when needed
+        from ..graph.neo4j_graph import Neo4jGraph
+        from ..processing.chunker import chunk_document
+        from ..retrieval.dense_retriever import get_dense_retriever
+        from ..retrieval.tfidf_retriever import Financial10QRetriever
+        from ..retrieval.ensemble_setup import create_graph_enhanced_retriever
+
         # Create and populate graph
         neo4j_graph_instance = Neo4jGraph(neo4j_uri, neo4j_user, neo4j_password)
         neo4j_graph_instance.add_document_structure(elements)
-        
+
         # Recreate ensemble retriever with graph integration
         if ensemble_retriever:
             # Get base retrievers and recreate with graph
@@ -110,7 +108,7 @@ def add_to_graph(neo4j_uri, neo4j_user, neo4j_password):
                 dense_retriever, sparse_retriever, neo4j_graph_instance
             )
             logger.info("Retriever updated with graph integration")
-        
+
         return "Document structure added to graph and retriever enhanced!"
     except Exception as e:
         logger.error(f"Graph integration failed: {e}")
@@ -135,6 +133,17 @@ def answer_question_and_context(question, api_key, cohere_api_key, use_reranker)
         # Set key in environment for the model client only at call sites
         if api_key:
             os.environ["GOOGLE_API_KEY"] = api_key
+
+        # Import heavy libraries only when needed
+        from ..tools.router import route_query
+        from ..tools.general_tool import GeneralTool
+        from ..tools.table_tool import TableTool
+        from ..tools.mda_tool import MDATool
+        from ..tools.risk_tool import RiskTool
+        from ..llm.langchain_llm import LangchainLLM
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        from langchain.retrievers.contextual_compression import ContextualCompressionRetriever
+        from langchain_cohere import CohereRerank
 
         logger.debug("Initializing ChatGoogleGenerativeAI model")
         langchain_llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite")
@@ -167,14 +176,14 @@ def answer_question_and_context(question, api_key, cohere_api_key, use_reranker)
         tool_name = route_query(question)
         tool = tools[tool_name]
         logger.info(f"ROUTING: Question '{question}' routed to tool: {tool_name}")
-        
+
         # Execute tool and get answer
         answer = tool.execute(question)
-        
+
         # Get context documents for additional logging
         context = retriever.get_relevant_documents(question)
         logger.info(f"RETRIEVAL_SUMMARY: Retrieved {len(context)} context documents for UI logging")
-        
+
         # ENHANCED CONTEXT LOGGING: Log all context chunks with metadata
         for i, doc in enumerate(context):
             chunk_preview = doc.page_content[:150].replace('\n', ' ')  # First 150 chars
@@ -189,71 +198,143 @@ def answer_question_and_context(question, api_key, cohere_api_key, use_reranker)
         return "An error occurred while answering the question. Check logs for details.", []
 
 def run_evaluation(question, ground_truth, api_key, cohere_api_key, use_reranker):
+    # Import heavy library only when needed
+    from ..evaluation.ragas_evaluation import evaluate_ragas
+
     answer, context = answer_question_and_context(question, api_key, cohere_api_key, use_reranker)
     logger.info("run_evaluation called")
     result = evaluate_ragas(question, answer, context, ground_truth)
     return result
 
 def generate_summary(api_key):
-    """Generate full document summarization using LlamaIndex."""
+    """Generate comprehensive 10-Q summarization using specialized tools."""
     logger.info("generate_summary called")
     if not elements:
         return "Please process a file first."
-    
+
     try:
         if api_key:
             os.environ["GOOGLE_API_KEY"] = api_key
-        langchain_llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash")
-        
-        # Use chunked document content (actual text) instead of element tag strings
-        chunks = chunk_document(elements)
-        # Concatenate chunk contents; filter out empty/minimal pages to avoid noise
-        chunk_texts = [doc.page_content.strip() for doc in chunks if doc.page_content and len(doc.page_content.strip()) > 0]
-        if not chunk_texts:
-            logger.warning("No chunk text extracted; summary may be empty")
-        full_text = "\n\n".join(chunk_texts)
-        
-        # Use LLM for summarization
-        summary_prompt = f"""
-Please provide a comprehensive summary of this SEC 10-Q quarterly report:
 
-{full_text[:8000]}  # Limit text for token constraints
+        # Import heavy libraries only when needed
+        from ..tools.mda_tool import MDATool
+        from ..tools.risk_tool import RiskTool
+        from ..tools.table_tool import TableTool
+        from ..tools.general_tool import GeneralTool
+        from ..llm.langchain_llm import LangchainLLM
+        from langchain_google_genai import ChatGoogleGenerativeAI
 
-Focus on:
-1. Key financial performance metrics
-2. Revenue and earnings highlights
-3. Major business developments
-4. Risk factors and challenges
-5. Forward-looking statements
+        # Use correct model version
+        langchain_llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite")
+        llama_llm = LangchainLLM(langchain_llm)
 
-Provide a structured summary in markdown format.
+        # Use specialized tools instead of raw text processing
+        mda_tool = MDATool(langchain_llm, elements)
+        risk_tool = RiskTool(langchain_llm, elements)
+        table_tool = TableTool(ensemble_retriever, llama_llm, elements)
+        general_tool = GeneralTool(ensemble_retriever, langchain_llm)
+
+        logger.info("Starting comprehensive 10-Q summarization with specialized tools")
+
+        # Generate targeted summaries for each section
+        sections_summary = {}
+
+        # Financial Performance Summary (using TableTool)
+        try:
+            financial_summary = table_tool.execute(
+                "Summarize the key financial performance metrics, revenue trends, and profitability indicators from the financial statements"
+            )
+            sections_summary["financial_performance"] = financial_summary
+            logger.info("Financial performance summary completed")
+        except Exception as e:
+            logger.error(f"Financial summary failed: {e}")
+            sections_summary["financial_performance"] = "Financial summary not available due to processing error."
+
+        # Management Discussion & Analysis Summary (using MDATool)
+        try:
+            mda_summary = mda_tool.execute(
+                "Provide a comprehensive summary of management's discussion and analysis, including business outlook, operational highlights, and forward-looking statements"
+            )
+            sections_summary["mda_analysis"] = mda_summary
+            logger.info("MD&A summary completed")
+        except Exception as e:
+            logger.error(f"MD&A summary failed: {e}")
+            sections_summary["mda_analysis"] = "MD&A summary not available due to processing error."
+
+        # Risk Factors Summary (using RiskTool)
+        try:
+            risk_summary = risk_tool.execute(
+                "Summarize the primary risk factors, uncertainties, and potential challenges facing the company"
+            )
+            sections_summary["risk_factors"] = risk_summary
+            logger.info("Risk factors summary completed")
+        except Exception as e:
+            logger.error(f"Risk summary failed: {e}")
+            sections_summary["risk_factors"] = "Risk factors summary not available due to processing error."
+
+        # Business Operations Summary (using GeneralTool)
+        try:
+            business_summary = general_tool.execute(
+                "Summarize key business developments, operational changes, market conditions, and strategic initiatives mentioned in the quarterly report"
+            )
+            sections_summary["business_operations"] = business_summary
+            logger.info("Business operations summary completed")
+        except Exception as e:
+            logger.error(f"Business summary failed: {e}")
+            sections_summary["business_operations"] = "Business operations summary not available due to processing error."
+
+        # Create structured comprehensive summary
+        comprehensive_summary = f"""# 10-Q Quarterly Report - Comprehensive Summary
+
+## Financial Performance Highlights
+{sections_summary["financial_performance"]}
+
+## Management Discussion & Analysis
+{sections_summary["mda_analysis"]}
+
+## Risk Factors & Uncertainties
+{sections_summary["risk_factors"]}
+
+## Business Operations & Developments
+{sections_summary["business_operations"]}
+
+## Summary Assessment
+This quarterly report analysis leverages hybrid retrieval with financial domain expertise to provide comprehensive insights across all major sections of the 10-Q filing. Each section has been analyzed using specialized tools optimized for financial document understanding.
+
+*Generated using metadata-driven hybrid RAG with specialized financial tools*
 """
-        
-        response = langchain_llm.invoke(summary_prompt)
-        return response.content
-        
+
+        logger.info("Comprehensive 10-Q summary generated successfully")
+        return comprehensive_summary
+
     except Exception as e:
         logger.error(f"Summary generation failed: {e}")
-        return f"Summary generation failed: {e}"
+        return f"Summary generation failed: {e}\n\nPlease check:\n1. Google API key is valid\n2. Document is properly processed\n3. Internet connection is stable"
 
 def query_tables(question, api_key):
     """Specialized interface for table queries."""
     logger.info("query_tables called")
     if not elements:
         return "Please process a file first."
-    
+
     try:
         if api_key:
             os.environ["GOOGLE_API_KEY"] = api_key
+
+        # Import heavy libraries only when needed
+        from ..tools.table_tool import TableTool
+        from ..llm.langchain_llm import LangchainLLM
+        from langchain_google_genai import ChatGoogleGenerativeAI
+
         langchain_llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash")
         llama_llm = LangchainLLM(langchain_llm)
-        
+
         # Force routing to table tool
         table_tool = TableTool(ensemble_retriever, llama_llm, elements)
         answer = table_tool.execute(question)
-        
+
         return answer
-        
+
     except Exception as e:
         logger.error(f"Table query failed: {e}")
         return f"Table query failed: {e}"
@@ -263,34 +344,40 @@ def financial_analysis(api_key):
     logger.info("financial_analysis called")
     if not elements:
         return "Please process a file first."
-    
+
     try:
         if api_key:
             os.environ["GOOGLE_API_KEY"] = api_key
+
+        # Import heavy libraries only when needed
+        from ..tools.mda_tool import MDATool
+        from ..tools.risk_tool import RiskTool
+        from langchain_google_genai import ChatGoogleGenerativeAI
+
         langchain_llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash")
-        
+
         # Use specialized tools for analysis
         mda_tool = MDATool(langchain_llm, elements)
         risk_tool = RiskTool(langchain_llm, elements)
-        
+
         # Generate comprehensive analysis
         mda_analysis = mda_tool.execute("What are the key financial performance trends and management outlook?")
         risk_analysis = risk_tool.execute("What are the primary risk factors and uncertainties?")
-        
+
         analysis = f"""# Financial Health Assessment
 
 ## Management Discussion & Analysis
 {mda_analysis}
 
-## Risk Factor Analysis  
+## Risk Factor Analysis
 {risk_analysis}
 
 ## Overall Assessment
 Based on the MD&A and risk factors, this analysis provides insights into the company's financial health and forward-looking challenges.
 """
-        
+
         return analysis
-        
+
     except Exception as e:
         logger.error(f"Financial analysis failed: {e}")
         return f"Financial analysis failed: {e}"
@@ -298,8 +385,9 @@ Based on the MD&A and risk factors, this analysis provides insights into the com
 def get_system_info():
     """Display system information and metrics."""
     logger.info("get_system_info called")
-    
+
     try:
+        # Import heavy libraries only when needed
         import psutil
         import platform
         from datetime import datetime
