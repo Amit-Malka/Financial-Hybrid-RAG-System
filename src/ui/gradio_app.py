@@ -3,7 +3,25 @@ import os
 import shutil
 import logging
 from ..logging_setup import initialize_logging
+from ..tools.router import route_query
+from ..tools.general_tool import GeneralTool
+from ..tools.table_tool import TableTool
+from ..tools.mda_tool import MDATool
+from ..tools.risk_tool import RiskTool
+from ..retrieval.dense_retriever import get_dense_retriever
+from ..retrieval.tfidf_retriever import Financial10QRetriever
+from ..retrieval.ensemble_setup import create_ensemble_retriever, create_graph_enhanced_retriever
+from ..llm.langchain_llm import LangchainLLM
+from ..processing.pdf_to_html import convert_pdf_to_html
+from ..processing.pdf_parser import load_html
+from ..processing.chunker import chunk_document
+from ..graph.neo4j_graph import Neo4jGraph
+from ..evaluation.ragas_evaluation import evaluate_ragas
 from ..config import Config
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.documents import Document
+from langchain.retrievers.contextual_compression import ContextualCompressionRetriever
+from langchain_cohere import CohereRerank
 
 # Initialize logging for UI component
 initialize_logging(component_name="ui")
@@ -29,15 +47,6 @@ def clear_global_state():
 def process_file(file, api_key):
     global elements, ensemble_retriever
     logger.info("process_file called")
-
-    # Import heavy libraries only when needed
-    from ..processing.pdf_to_html import convert_pdf_to_html
-    from ..processing.pdf_parser import load_html
-    from ..processing.chunker import chunk_document
-    from ..retrieval.dense_retriever import get_dense_retriever
-    from ..retrieval.tfidf_retriever import Financial10QRetriever
-    from ..retrieval.ensemble_setup import create_graph_enhanced_retriever
-
     if file is not None:
         # Determine source path (supports gradio file object or direct filepath)
         src_path = file if isinstance(file, str) else getattr(file, "name", None)
@@ -86,19 +95,12 @@ def add_to_graph(neo4j_uri, neo4j_user, neo4j_password):
     logger.info("add_to_graph called")
     if not elements:
         return "Please process a file first."
-
+    
     try:
-        # Import heavy libraries only when needed
-        from ..graph.neo4j_graph import Neo4jGraph
-        from ..processing.chunker import chunk_document
-        from ..retrieval.dense_retriever import get_dense_retriever
-        from ..retrieval.tfidf_retriever import Financial10QRetriever
-        from ..retrieval.ensemble_setup import create_graph_enhanced_retriever
-
         # Create and populate graph
         neo4j_graph_instance = Neo4jGraph(neo4j_uri, neo4j_user, neo4j_password)
         neo4j_graph_instance.add_document_structure(elements)
-
+        
         # Recreate ensemble retriever with graph integration
         if ensemble_retriever:
             # Get base retrievers and recreate with graph
@@ -108,7 +110,7 @@ def add_to_graph(neo4j_uri, neo4j_user, neo4j_password):
                 dense_retriever, sparse_retriever, neo4j_graph_instance
             )
             logger.info("Retriever updated with graph integration")
-
+        
         return "Document structure added to graph and retriever enhanced!"
     except Exception as e:
         logger.error(f"Graph integration failed: {e}")
@@ -133,17 +135,6 @@ def answer_question_and_context(question, api_key, cohere_api_key, use_reranker)
         # Set key in environment for the model client only at call sites
         if api_key:
             os.environ["GOOGLE_API_KEY"] = api_key
-
-        # Import heavy libraries only when needed
-        from ..tools.router import route_query
-        from ..tools.general_tool import GeneralTool
-        from ..tools.table_tool import TableTool
-        from ..tools.mda_tool import MDATool
-        from ..tools.risk_tool import RiskTool
-        from ..llm.langchain_llm import LangchainLLM
-        from langchain_google_genai import ChatGoogleGenerativeAI
-        from langchain.retrievers.contextual_compression import ContextualCompressionRetriever
-        from langchain_cohere import CohereRerank
 
         logger.debug("Initializing ChatGoogleGenerativeAI model")
         langchain_llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite")
@@ -176,14 +167,14 @@ def answer_question_and_context(question, api_key, cohere_api_key, use_reranker)
         tool_name = route_query(question)
         tool = tools[tool_name]
         logger.info(f"ROUTING: Question '{question}' routed to tool: {tool_name}")
-
+        
         # Execute tool and get answer
         answer = tool.execute(question)
-
+        
         # Get context documents for additional logging
         context = retriever.get_relevant_documents(question)
         logger.info(f"RETRIEVAL_SUMMARY: Retrieved {len(context)} context documents for UI logging")
-
+        
         # ENHANCED CONTEXT LOGGING: Log all context chunks with metadata
         for i, doc in enumerate(context):
             chunk_preview = doc.page_content[:150].replace('\n', ' ')  # First 150 chars
@@ -198,9 +189,6 @@ def answer_question_and_context(question, api_key, cohere_api_key, use_reranker)
         return "An error occurred while answering the question. Check logs for details.", []
 
 def run_evaluation(question, ground_truth, api_key, cohere_api_key, use_reranker):
-    # Import heavy library only when needed
-    from ..evaluation.ragas_evaluation import evaluate_ragas
-
     answer, context = answer_question_and_context(question, api_key, cohere_api_key, use_reranker)
     logger.info("run_evaluation called")
     result = evaluate_ragas(question, answer, context, ground_truth)
@@ -215,14 +203,6 @@ def generate_summary(api_key):
     try:
         if api_key:
             os.environ["GOOGLE_API_KEY"] = api_key
-
-        # Import heavy libraries only when needed
-        from ..tools.mda_tool import MDATool
-        from ..tools.risk_tool import RiskTool
-        from ..tools.table_tool import TableTool
-        from ..tools.general_tool import GeneralTool
-        from ..llm.langchain_llm import LangchainLLM
-        from langchain_google_genai import ChatGoogleGenerativeAI
 
         # Use correct model version
         langchain_llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite")
@@ -316,25 +296,19 @@ def query_tables(question, api_key):
     logger.info("query_tables called")
     if not elements:
         return "Please process a file first."
-
+    
     try:
         if api_key:
             os.environ["GOOGLE_API_KEY"] = api_key
-
-        # Import heavy libraries only when needed
-        from ..tools.table_tool import TableTool
-        from ..llm.langchain_llm import LangchainLLM
-        from langchain_google_genai import ChatGoogleGenerativeAI
-
         langchain_llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash")
         llama_llm = LangchainLLM(langchain_llm)
-
+        
         # Force routing to table tool
         table_tool = TableTool(ensemble_retriever, llama_llm, elements)
         answer = table_tool.execute(question)
-
+        
         return answer
-
+        
     except Exception as e:
         logger.error(f"Table query failed: {e}")
         return f"Table query failed: {e}"
@@ -344,40 +318,34 @@ def financial_analysis(api_key):
     logger.info("financial_analysis called")
     if not elements:
         return "Please process a file first."
-
+    
     try:
         if api_key:
             os.environ["GOOGLE_API_KEY"] = api_key
-
-        # Import heavy libraries only when needed
-        from ..tools.mda_tool import MDATool
-        from ..tools.risk_tool import RiskTool
-        from langchain_google_genai import ChatGoogleGenerativeAI
-
         langchain_llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash")
-
+        
         # Use specialized tools for analysis
         mda_tool = MDATool(langchain_llm, elements)
         risk_tool = RiskTool(langchain_llm, elements)
-
+        
         # Generate comprehensive analysis
         mda_analysis = mda_tool.execute("What are the key financial performance trends and management outlook?")
         risk_analysis = risk_tool.execute("What are the primary risk factors and uncertainties?")
-
+        
         analysis = f"""# Financial Health Assessment
 
 ## Management Discussion & Analysis
 {mda_analysis}
 
-## Risk Factor Analysis
+## Risk Factor Analysis  
 {risk_analysis}
 
 ## Overall Assessment
 Based on the MD&A and risk factors, this analysis provides insights into the company's financial health and forward-looking challenges.
 """
-
+        
         return analysis
-
+        
     except Exception as e:
         logger.error(f"Financial analysis failed: {e}")
         return f"Financial analysis failed: {e}"
@@ -385,9 +353,8 @@ Based on the MD&A and risk factors, this analysis provides insights into the com
 def get_system_info():
     """Display system information and metrics."""
     logger.info("get_system_info called")
-
+    
     try:
-        # Import heavy libraries only when needed
         import psutil
         import platform
         from datetime import datetime
