@@ -2,17 +2,27 @@ from langchain_core.documents import Document
 from sec_parser.semantic_elements.abstract_semantic_element import AbstractSemanticElement
 from sec_parser.semantic_elements.top_section_title import TopSectionTitle
 import logging
+from collections import Counter
 from ..config import Config
 
 def chunk_document(elements: list[AbstractSemanticElement]) -> list[Document]:
-    """Converts SEC semantic elements into LangChain Documents with metadata."""
+    """Builds chunks from SEC semantic elements.
+
+    - Default: preserves existing 1:1 element→chunk behavior to maintain backward compatibility.
+    - If Config.USE_SECTION_AWARE_CHUNKING is True: creates section-aware semantic chunks
+      that never cross top-level section boundaries, target Config.CHUNK_SIZE, and apply
+      Config.CHUNK_OVERLAP within the same section.
+    """
     logger = logging.getLogger("processing.chunker")
-    chunks = []
+
+    if getattr(Config, "USE_SECTION_AWARE_CHUNKING", False):
+        return _build_section_aware_chunks(elements, logger)
+
+    # Fallback to 1:1 element wrapping (legacy behavior)
+    chunks: list[Document] = []
     for i, element in enumerate(elements):
         metadata = {"element_type": element.__class__.__name__}
-        # Add unique chunk identifier (5th metadata field per specification)
         metadata["chunk_id"] = f"{Config.CHUNK_ID_PREFIX}{i}"
-        # Safely enrich metadata if attributes exist on the element
         page_number = getattr(element, "page_number", None)
         if page_number is not None:
             metadata["page_number"] = page_number
@@ -22,17 +32,142 @@ def chunk_document(elements: list[AbstractSemanticElement]) -> list[Document]:
         content_type = getattr(element, "content_type", None)
         if content_type is not None:
             metadata["content_type"] = content_type
-        
-        # ENHANCED CONTENT EXTRACTION: Try multiple methods to get actual text content
+
         text_content = extract_element_text(element)
-        
-        # Log content extraction for debugging
         if len(text_content.strip()) < 10:
-            logger.warning(f"Element {i} ({element.__class__.__name__}) has minimal content: '{text_content[:50]}...'")
-        
+            logger.warning(
+                f"Element {i} ({element.__class__.__name__}) has minimal content: '{text_content[:50]}...'"
+            )
+
         chunks.append(Document(page_content=text_content, metadata=metadata))
-    logger.info(f"Chunked {len(elements)} elements -> {len(chunks)} documents with 5-field metadata")
+
+    logger.info(
+        f"Chunked {len(elements)} elements -> {len(chunks)} documents (legacy 1:1) with 5-field metadata"
+    )
     return chunks
+
+def _build_section_aware_chunks(elements: list[AbstractSemanticElement], logger: logging.Logger) -> list[Document]:
+    """Create section-aware semantic chunks using size and overlap from Config.
+
+    Rules:
+      - Do not cross TopSectionTitle boundaries (treat each sequence after a TopSectionTitle
+        as a section until the next TopSectionTitle).
+      - Concatenate adjacent element texts until reaching CHUNK_SIZE; when starting a new
+        chunk, carry CHUNK_OVERLAP characters from the tail of previous chunk within the
+        same section.
+      - Preserve 5-field metadata; for merged chunks:
+          element_type: "Composite" if >1 source types else that type
+          page_number: lowest page; include all pages in metadata["pages"]
+          chunk_id: sequential based on final chunk index
+          section_path: dominant/first non-empty within section
+          content_type: "mixed" if multiple else that type or "unknown"
+    """
+    chunk_size = int(Config.CHUNK_SIZE)
+    overlap = int(Config.CHUNK_OVERLAP)
+    assert overlap < chunk_size
+
+    # Identify section boundaries based on TopSectionTitle occurrences
+    sections: list[list[int]] = []  # list of lists of indices into elements
+    current_indices: list[int] = []
+    for idx, el in enumerate(elements):
+        if isinstance(el, TopSectionTitle):
+            # Start a new section; flush prior if exists
+            if current_indices:
+                sections.append(current_indices)
+                current_indices = []
+            continue
+        current_indices.append(idx)
+    if current_indices:
+        sections.append(current_indices)
+
+    documents: list[Document] = []
+    running_chunk_index = 0
+
+    for sec_indices in sections:
+        if not sec_indices:
+            continue
+
+        # Collect section metadata candidates once
+        sec_section_paths = []
+        for i in sec_indices:
+            sp = getattr(elements[i], "section_path", None)
+            if sp:
+                sec_section_paths.append(str(sp))
+        section_path_value = (
+            Counter(sec_section_paths).most_common(1)[0][0] if sec_section_paths else ""
+        )
+
+        # Build chunks within this section
+        cursor = 0
+        current_text = ""
+        current_elements: list[int] = []
+
+        def flush_current_chunk():
+            nonlocal running_chunk_index, current_text, current_elements
+            if not current_text:
+                return
+
+            # Aggregate metadata from current_elements
+            element_types = [elements[i].__class__.__name__ for i in current_elements]
+            content_types = [getattr(elements[i], "content_type", None) for i in current_elements]
+            pages = [getattr(elements[i], "page_number", None) for i in current_elements if getattr(elements[i], "page_number", None) is not None]
+            page_min = min(pages) if pages else None
+            element_type_value = (
+                element_types[0] if len(set(element_types)) == 1 else "Composite"
+            )
+            # Resolve content_type
+            ct_candidates = [ct for ct in content_types if ct]
+            content_type_value = (
+                ct_candidates[0] if len(set(ct_candidates)) <= 1 and ct_candidates else ("mixed" if ct_candidates else "unknown")
+            )
+
+            metadata = {
+                "element_type": element_type_value,
+                "chunk_id": f"{Config.CHUNK_ID_PREFIX}{running_chunk_index}",
+                "section_path": section_path_value,
+                "content_type": content_type_value,
+            }
+            if page_min is not None:
+                metadata["page_number"] = page_min
+            if pages:
+                metadata["pages"] = sorted(set(pages))
+
+            documents.append(Document(page_content=current_text, metadata=metadata))
+            running_chunk_index += 1
+
+        # Iterate through elements and build text windows
+        while cursor < len(sec_indices):
+            idx = sec_indices[cursor]
+            el = elements[idx]
+            el_text = extract_element_text(el)
+            if not el_text:
+                cursor += 1
+                continue
+
+            # If adding this element exceeds target chunk size, flush current and start new with overlap
+            if current_text and len(current_text) + 1 + len(el_text) > chunk_size:
+                flush_current_chunk()
+                # Start new chunk with overlap from previous chunk tail within the section
+                if documents and overlap > 0:
+                    tail = documents[-1].page_content[-overlap:]
+                    current_text = tail
+                    current_elements = []  # overlap is from text, not from a single element
+                else:
+                    current_text = ""
+                    current_elements = []
+
+            # Append element text (with a space) and record source element index
+            current_text = (current_text + (" " if current_text else "") + el_text).strip()
+            current_elements.append(idx)
+            cursor += 1
+
+        # Flush any remainder for this section
+        flush_current_chunk()
+
+    logger.info(
+        f"Built {len(documents)} section-aware chunks from {len(elements)} elements (size={chunk_size}, overlap={overlap})"
+    )
+    return documents
 
 def extract_element_text(element: AbstractSemanticElement) -> str:
     """Extract actual text content from SEC parser elements using enhanced HTML parsing."""
@@ -62,8 +197,8 @@ def extract_element_text(element: AbstractSemanticElement) -> str:
             # Enhanced text extraction for CSS-positioned content
             text_parts = []
 
-            # Get text from all p, span, b, strong, em elements
-            for tag in soup.find_all(['p', 'span', 'b', 'strong', 'em', 'div']):
+            # Get text from common textual and tabular/list elements
+            for tag in soup.find_all(['p', 'span', 'b', 'strong', 'em', 'div', 'li', 'td', 'th']):
                 tag_text = tag.get_text(strip=True)
                 if tag_text and len(tag_text) > 1:
                     text_parts.append(tag_text)

@@ -71,9 +71,18 @@ class GraphEnhancedRetriever(BaseRetriever):
                 
                 # Get section-related documents 
                 section_docs = self._get_section_documents(doc.metadata.get("section_path"))
+                # Optionally get similar documents
+                similar_docs = self._get_similar_documents(chunk_id)
                 
                 # Add unique neighbors to enhanced results
-                for neighbor in neighbors + section_docs:
+                for neighbor in neighbors + section_docs + similar_docs:
+                    if neighbor and isinstance(neighbor.metadata, dict):
+                        if neighbor in neighbors:
+                            neighbor.metadata["graph_source"] = "NEXT"
+                        elif neighbor in section_docs:
+                            neighbor.metadata["graph_source"] = "SECTION"
+                        else:
+                            neighbor.metadata["graph_source"] = "SIMILAR_TO"
                     if neighbor not in enhanced_docs:
                         enhanced_docs.append(neighbor)
                         
@@ -96,9 +105,9 @@ class GraphEnhancedRetriever(BaseRetriever):
             with self.neo4j_graph.driver.session() as session:
                 result = session.run(
                     """
-                    MATCH (e1:Element {chunk_id: $chunk_id})-[:NEXT]->(e2:Element)
-                    RETURN e2.chunk_id as chunk_id, e2.text as content, e2.page_number as page_number,
-                           e2.section_path as section_path, e2.type as element_type, e2.content_type as content_type
+                    MATCH (c1:Chunk {chunk_id: $chunk_id})-[:NEXT]->(c2:Chunk)
+                    RETURN c2.chunk_id as chunk_id, c2.text as content, c2.page_number as page_number,
+                           c2.section_path as section_path, c2.element_type as element_type, c2.content_type as content_type
                     """,
                     chunk_id=chunk_id,
                 )
@@ -127,9 +136,9 @@ class GraphEnhancedRetriever(BaseRetriever):
             with self.neo4j_graph.driver.session() as session:
                 result = session.run(
                     """
-                    MATCH (e:Element {section_path: $section_path})
-                    RETURN e.chunk_id as chunk_id, e.text as content, e.page_number as page_number,
-                           e.section_path as section_path, e.type as element_type, e.content_type as content_type
+                    MATCH (c:Chunk {section_path: $section_path})
+                    RETURN c.chunk_id as chunk_id, c.text as content, c.page_number as page_number,
+                           c.section_path as section_path, c.element_type as element_type, c.content_type as content_type
                     LIMIT 25
                     """,
                     section_path=section_path,
@@ -147,4 +156,38 @@ class GraphEnhancedRetriever(BaseRetriever):
                 return docs
         except Exception as e:
             self._logger.warning(f"Neo4j section query failed: {e}")
+            return []
+
+    def _get_similar_documents(self, chunk_id: str) -> List[Document]:
+        """Get embedding-similar chunks via SIMILAR_TO edges if enabled."""
+        try:
+            from ..config import Config
+            if not getattr(Config, "ENABLE_SIMILAR_TO", False):
+                return []
+            if not self.neo4j_graph or not getattr(self.neo4j_graph, "driver", None):
+                return []
+            with self.neo4j_graph.driver.session() as session:
+                result = session.run(
+                    """
+                    MATCH (c1:Chunk {chunk_id: $chunk_id})-[:SIMILAR_TO]->(c2:Chunk)
+                    RETURN c2.chunk_id as chunk_id, c2.text as content, c2.page_number as page_number,
+                           c2.section_path as section_path, c2.element_type as element_type, c2.content_type as content_type
+                    ORDER BY coalesce(c2.page_number, 1e9)
+                    LIMIT 25
+                    """,
+                    chunk_id=chunk_id,
+                )
+                docs: List[Document] = []
+                for record in result:
+                    metadata = {
+                        "chunk_id": record.get("chunk_id"),
+                        "page_number": record.get("page_number"),
+                        "section_path": record.get("section_path"),
+                        "content_type": record.get("content_type"),
+                        "element_type": record.get("element_type"),
+                    }
+                    docs.append(Document(page_content=record.get("content") or "", metadata={k: v for k, v in metadata.items() if v is not None}))
+                return docs
+        except Exception as e:
+            self._logger.warning(f"Neo4j SIMILAR_TO query failed: {e}")
             return []

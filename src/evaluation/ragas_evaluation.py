@@ -5,7 +5,10 @@ from ragas.metrics import (
     context_recall,
     context_precision,
 )
-from ragas.llms import LangchainLLMWrapper
+try:
+    from ragas.llms import LangchainLLMWrapper as RagasLangchainLLM
+except ImportError:  # version compatibility
+    from ragas.llms import LangchainLLM as RagasLangchainLLM
 from ragas.embeddings import HuggingfaceEmbeddings
 from langchain_google_genai import ChatGoogleGenerativeAI
 from datasets import Dataset
@@ -54,7 +57,7 @@ def evaluate_ragas(question, answer, context, ground_truth, api_key=None):
 
         # Wrap Gemini for RAGAS compatibility
         gemini_wrapper = GeminiLLMWrapper(gemini_llm)
-        ragas_llm = LangchainLLMWrapper(gemini_wrapper)
+        ragas_llm = RagasLangchainLLM(gemini_wrapper)
 
         # Configure embeddings to use HuggingFace (free, no API key needed)
         logger.info("Setting up HuggingFace embeddings for RAGAS")
@@ -91,13 +94,35 @@ def evaluate_ragas(question, answer, context, ground_truth, api_key=None):
             ],
         )
 
-        # Extract the four key metrics
-        result_dict = {
-            "faithfulness": float(result.get("faithfulness", 0.0)),
-            "answer_relevancy": float(result.get("answer_relevancy", 0.0)),
-            "context_recall": float(result.get("context_recall", 0.0)),
-            "context_precision": float(result.get("context_precision", 0.0)),
-        }
+        # Extract the four key metrics (support both dict and dataframe-like outputs)
+        try:
+            if hasattr(result, "to_pandas"):
+                df = result.to_pandas()
+                row = df.iloc[0] if len(df) > 0 else {}
+                result_dict = {
+                    "faithfulness": float(row.get("faithfulness", 0.0) or 0.0),
+                    "answer_relevancy": float(row.get("answer_relevancy", 0.0) or 0.0),
+                    "context_recall": float(row.get("context_recall", 0.0) or 0.0),
+                    "context_precision": float(row.get("context_precision", 0.0) or 0.0),
+                }
+            elif isinstance(result, dict):
+                result_dict = {
+                    "faithfulness": float(result.get("faithfulness", 0.0)),
+                    "answer_relevancy": float(result.get("answer_relevancy", 0.0)),
+                    "context_recall": float(result.get("context_recall", 0.0)),
+                    "context_precision": float(result.get("context_precision", 0.0)),
+                }
+            else:
+                # Last-resort attribute access
+                result_dict = {
+                    "faithfulness": float(getattr(result, "faithfulness", 0.0)),
+                    "answer_relevancy": float(getattr(result, "answer_relevancy", 0.0)),
+                    "context_recall": float(getattr(result, "context_recall", 0.0)),
+                    "context_precision": float(getattr(result, "context_precision", 0.0)),
+                }
+        except Exception as e:
+            logger.error(f"Failed to parse RAGAS result: {e}")
+            return {"error": f"Failed to parse RAGAS result: {e}"}
 
         # Calculate overall score
         result_dict["overall_score"] = (
@@ -112,53 +137,5 @@ def evaluate_ragas(question, answer, context, ground_truth, api_key=None):
 
     except Exception as e:
         logger.error(f"RAGAS LLM evaluation failed: {e}")
-        # Fallback to basic evaluation if RAGAS fails
-        logger.info("Falling back to rule-based evaluation (all 4 metrics)")
-        return _fallback_evaluation(question, answer, context, ground_truth)
+        return {"error": f"RAGAS evaluation failed: {e}"}
 
-def _fallback_evaluation(question, answer, context, ground_truth):
-    """Rule-based fallback evaluation when LLM-based RAGAS fails."""
-    logger = logging.getLogger("evaluation.ragas")
-
-    try:
-        # Basic evaluation as fallback
-        answer_lower = answer.lower()
-        ground_truth_lower = ground_truth.lower()
-
-        # Basic accuracy check
-        accuracy = 1.0 if ground_truth_lower in answer_lower else 0.5
-
-        # Context relevance check
-        context_relevance = 0.0
-        if context:
-            context_text = " ".join([c.page_content for c in context]).lower()
-            answer_words = set(answer_lower.split())
-            context_words = set(context_text.split())
-            common_words = answer_words.intersection(context_words)
-            context_relevance = len(common_words) / len(answer_words) if answer_words else 0.0
-
-        # Ground truth match
-        exact_match = 1.0 if answer.strip().lower() == ground_truth.strip().lower() else 0.0
-
-        result = {
-            "faithfulness": accuracy,
-            "answer_relevancy": context_relevance,
-            "context_recall": exact_match,
-            "context_precision": context_relevance,
-            "overall_score": (accuracy + context_relevance + exact_match + context_relevance) / 4.0,
-            "evaluation_type": "fallback_basic"
-        }
-
-        logger.info(f"Fallback evaluation completed: {result}")
-        return result
-
-    except Exception as e:
-        logger.error(f"Fallback evaluation failed: {e}")
-        return {
-            "error": "All evaluation methods failed",
-            "faithfulness": 0.0,
-            "answer_relevancy": 0.0,
-            "context_recall": 0.0,
-            "context_precision": 0.0,
-            "overall_score": 0.0
-        }

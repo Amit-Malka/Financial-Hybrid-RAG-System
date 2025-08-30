@@ -54,21 +54,22 @@ class Config:
     # Graph enhancement settings
     ENABLE_GRAPH_ENHANCEMENT = True
 
-    # Metadata schema
+    # Chunking behavior
+    # If True, use section-aware semantic chunking; otherwise, legacy 1:1 element wrapping
+    USE_SECTION_AWARE_CHUNKING = False
+
+    # Graph SIMILAR_TO enhancement
+    ENABLE_SIMILAR_TO = False
+    SIMILAR_TOP_N = 5
+    SIMILARITY_THRESHOLD = 0.7
+
+    # Metadata schema (5 fields)
     METADATA_SCHEMA = {
-        "section_path": [
-            "part_i/item_1/financial_statements",
-            "part_i/item_2/md_a", 
-            "part_i/item_3/market_risk",
-            "part_i/item_4/controls",
-            "part_ii/item_1a/risk_factors",
-            "part_ii/other"
-        ],
-        "content_type": [
-            "balance_sheet", "income_statement", "cash_flow", 
-            "notes", "md_a_narrative", "risk_disclosure", "legal"
-        ],
-        "page_number": int
+        "element_type": str,
+        "chunk_id": str,
+        "page_number": int,
+        "section_path": str,
+        "content_type": str,
     }
 
     # Logging configuration

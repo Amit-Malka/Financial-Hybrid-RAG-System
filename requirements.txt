@@ -13,6 +13,7 @@ llama-index-readers-file>=0.1.0
 llama-index-program-openai>=0.1.0
 llama-index-readers-llama-parse>=0.1.0
 ragas>=0.1.9
+deepeval>=0.21.0
 sec-parser>=0.5.0
 beautifulsoup4>=4.12.3
 lxml>=4.9.0
