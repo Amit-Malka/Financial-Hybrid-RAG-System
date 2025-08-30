@@ -35,87 +35,99 @@ def chunk_document(elements: list[AbstractSemanticElement]) -> list[Document]:
     return chunks
 
 def extract_element_text(element: AbstractSemanticElement) -> str:
-    """Extract actual text content from SEC parser elements using multiple fallback methods."""
-    
-    # Method 1: Try .text attribute
-    if hasattr(element, 'text') and element.text:
-        text = str(element.text).strip()
-        if text:
-            return text
-    
-    # Method 2: Try .content attribute
-    if hasattr(element, 'content') and element.content:
-        text = str(element.content).strip()
-        if text:
-            return text
-    
-    # Method 3: Try .inner_text attribute
-    if hasattr(element, 'inner_text') and element.inner_text:
-        text = str(element.inner_text).strip()
-        if text:
-            return text
-    
-    # Method 4: Try .get_text() method
+    """Extract actual text content from SEC parser elements using enhanced HTML parsing."""
+
+    # Method 1: Try existing text attributes first
+    for attr in ['text', 'content', 'inner_text']:
+        if hasattr(element, attr):
+            value = getattr(element, attr)
+            if value and len(str(value).strip()) > 5:
+                return str(value).strip()
+
+    # Method 2: Enhanced HTML parsing with BeautifulSoup
+    html_content = None
+
+    # Try to get HTML content from various attributes
+    for attr in ['html_tag', 'html', '_html', 'raw_html', 'source_html']:
+        if hasattr(element, attr):
+            html_content = getattr(element, attr)
+            if html_content:
+                break
+
+    if html_content:
+        try:
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(str(html_content), 'html.parser')
+
+            # Enhanced text extraction for CSS-positioned content
+            text_parts = []
+
+            # Get text from all p, span, b, strong, em elements
+            for tag in soup.find_all(['p', 'span', 'b', 'strong', 'em', 'div']):
+                tag_text = tag.get_text(strip=True)
+                if tag_text and len(tag_text) > 1:
+                    text_parts.append(tag_text)
+
+            # Join with spaces and clean up
+            full_text = ' '.join(text_parts)
+
+            # Clean up multiple spaces and normalize
+            import re
+            full_text = re.sub(r'\s+', ' ', full_text).strip()
+
+            if len(full_text) > 5:
+                return full_text
+
+        except Exception as e:
+            # Log parsing error but continue
+            import logging
+            logger = logging.getLogger("processing.chunker")
+            logger.debug(f"HTML parsing failed for element: {e}")
+
+    # Method 3: Try get_text() method
     if hasattr(element, 'get_text'):
         try:
             text = str(element.get_text()).strip()
-            if text:
+            if text and len(text) > 5:
                 return text
         except Exception:
             pass
-    
-    # Method 5: Try to access underlying HTML and extract text
-    if hasattr(element, 'html_tag') and element.html_tag:
-        try:
-            from bs4 import BeautifulSoup
-            soup = BeautifulSoup(str(element.html_tag), 'html.parser')
-            text = soup.get_text().strip()
-            if text:
-                return text
-        except Exception:
-            pass
-    
-    # Method 6: Check for html attribute and extract text
-    if hasattr(element, 'html') and element.html:
-        try:
-            from bs4 import BeautifulSoup
-            soup = BeautifulSoup(str(element.html), 'html.parser')
-            text = soup.get_text().strip()
-            if text:
-                return text
-        except Exception:
-            pass
-    
-    # Method 7: Try accessing the raw HTML content if available
-    for attr_name in ['_html', 'raw_html', 'source_html']:
-        if hasattr(element, attr_name):
-            try:
-                html_content = getattr(element, attr_name)
-                if html_content:
-                    from bs4 import BeautifulSoup
-                    soup = BeautifulSoup(str(html_content), 'html.parser')
-                    text = soup.get_text().strip()
-                    if text:
-                        return text
-            except Exception:
-                pass
-    
-    # Method 8: Fallback to string representation
+
+    # Method 4: Fallback to string representation
     fallback_text = str(element).strip()
-    
-    # If the string representation is just the class name, try to find any text attributes
-    if len(fallback_text) < 50 or fallback_text.startswith(element.__class__.__name__):
-        # Look for any attribute that might contain text
+
+    # If still minimal, try to find any meaningful text attributes
+    if len(fallback_text) < 20:
         for attr in dir(element):
-            if not attr.startswith('_') and attr not in ['html_tag', 'html']:
+            if not attr.startswith('_') and not callable(getattr(element, attr)):
                 try:
                     value = getattr(element, attr)
                     if isinstance(value, str) and len(value.strip()) > 10:
                         return value.strip()
                 except Exception:
-                    pass
-    
-    return fallback_text
+                    continue
+
+    return fallback_text if fallback_text else f"{element.__class__.__name__}<{getattr(element, 'tag_name', 'unknown')}>"
+
+
+def extract_tabular_patterns(text: str) -> bool:
+    """Detect if text contains tabular financial data patterns."""
+    import re
+
+    # Financial table patterns
+    patterns = [
+        r'\$[\d,]+\s+\$[\d,]+',  # Multiple dollar amounts in sequence
+        r'Q[1-4]\s+\d{4}.*Q[1-4]\s+\d{4}',  # Multiple quarters
+        r'\d+\.?\d*%.*\d+\.?\d*%',  # Multiple percentages
+        r'(Revenue|Cost|Income|Expense).*\$[\d,]+',  # Financial line items
+        r'(millions?|billions?|thousands?).*\$[\d,]+',  # Scale indicators
+        r'(increase|decrease).*\d+\.?\d*%',  # Change indicators
+        r'(TAC|Traffic|Acquisition|Cost).*\$?[\d,]+',  # TAC specific
+        r'\d{4}\s+\d{4}\s+\d{4}',  # Multiple years in sequence
+    ]
+
+    return any(re.search(pattern, text, re.IGNORECASE) for pattern in patterns)
+
 
 def get_section_chunks(elements: list[AbstractSemanticElement], section_type: type) -> list[Document]:
     """Gets chunked Documents for a specific section type."""

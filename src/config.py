@@ -27,9 +27,20 @@ class Config:
     FINANCIAL_BOOST = 2.0
     
     # Tools routing keywords
-    TABLE_KEYWORDS = ['revenue', 'income', 'balance', 'cash_flow', 'financial_statement', 
-                     'cost-per-click', 'cost_per_click', 'paid_clicks', 'paid clicks', 
+    TABLE_KEYWORDS = ['revenue', 'income', 'balance', 'cash_flow', 'financial_statement',
+                     'cost-per-click', 'cost_per_click', 'paid_clicks', 'paid clicks',
                      'click', 'clicks', 'impressions', 'cost-per-impression', 'monetization']
+
+    # Enhanced table processing keywords
+    ENHANCED_TABLE_KEYWORDS = [
+        "table", "revenue", "income", "cost", "TAC", "traffic acquisition cost",
+        "cost-per-click", "paid clicks", "quarter", "Q1", "Q2", "Q3", "Q4",
+        "financial", "balance sheet", "cash flow", "earnings", "margins",
+        "year-over-year", "percentage", "billion", "million", "rate"
+    ]
+
+    # Combine with existing table keywords
+    TABLE_KEYWORDS = TABLE_KEYWORDS + ENHANCED_TABLE_KEYWORDS
     RISK_KEYWORDS = ['risk', 'uncertainty', 'factor', 'may_adversely']
     MDA_KEYWORDS = ['management', 'discussion', 'analysis', 'outlook', 'results']
     
