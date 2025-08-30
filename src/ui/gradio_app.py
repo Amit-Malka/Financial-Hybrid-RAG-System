@@ -191,7 +191,7 @@ def answer_question_and_context(question, api_key, cohere_api_key, use_reranker)
 def run_evaluation(question, ground_truth, api_key, cohere_api_key, use_reranker):
     answer, context = answer_question_and_context(question, api_key, cohere_api_key, use_reranker)
     logger.info("run_evaluation called")
-    result = evaluate_ragas(question, answer, context, ground_truth)
+    result = evaluate_ragas(question, answer, context, ground_truth, api_key)
     return result
 
 def generate_summary(api_key):
@@ -300,7 +300,7 @@ def query_tables(question, api_key):
     try:
         if api_key:
             os.environ["GOOGLE_API_KEY"] = api_key
-        langchain_llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash")
+        langchain_llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite")
         llama_llm = LangchainLLM(langchain_llm)
         
         # Force routing to table tool
