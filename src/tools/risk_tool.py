@@ -1,3 +1,9 @@
+import os
+# Disable ChromaDB telemetry before any imports
+os.environ["ANONYMIZED_TELEMETRY"] = "False"
+os.environ["CHROMA_TELEMETRY"] = "False" 
+os.environ["CHROMA_DISABLE_TELEMETRY"] = "True"
+
 from .base import SimpleTool
 from langchain_core.language_models import BaseLanguageModel
 from ..retrieval.dense_retriever import get_dense_retriever

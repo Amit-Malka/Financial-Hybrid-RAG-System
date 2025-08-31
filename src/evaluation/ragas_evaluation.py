@@ -9,7 +9,12 @@ try:
     from ragas.llms import LangchainLLMWrapper as RagasLangchainLLM
 except ImportError:  # version compatibility
     from ragas.llms import LangchainLLM as RagasLangchainLLM
-from ragas.embeddings import HuggingfaceEmbeddings
+from langchain_community.embeddings import HuggingFaceEmbeddings
+try:
+    from ragas.embeddings import LangchainEmbeddings
+except ImportError:
+    # Fallback for different RAGAS versions
+    LangchainEmbeddings = None
 from langchain_google_genai import ChatGoogleGenerativeAI
 from datasets import Dataset
 import logging
@@ -61,9 +66,17 @@ def evaluate_ragas(question, answer, context, ground_truth, api_key=None):
 
         # Configure embeddings to use HuggingFace (free, no API key needed)
         logger.info("Setting up HuggingFace embeddings for RAGAS")
-        hf_embeddings = HuggingfaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2"
-        )
+        if LangchainEmbeddings:
+            # Use RAGAS's LangchainEmbeddings wrapper
+            base_embeddings = HuggingFaceEmbeddings(
+                model_name="sentence-transformers/all-MiniLM-L6-v2"
+            )
+            hf_embeddings = LangchainEmbeddings(base_embeddings)
+        else:
+            # Direct LangChain embeddings (might work with newer RAGAS versions)
+            hf_embeddings = HuggingFaceEmbeddings(
+                model_name="sentence-transformers/all-MiniLM-L6-v2"
+            )
 
         # Configure ALL FOUR RAGAS metrics to use Gemini LLM
         faithfulness.llm = ragas_llm

@@ -22,17 +22,27 @@ class Neo4jGraph:
         logger = logging.getLogger("graph")
         title = doc_title or "Untitled"
         with self.driver.session() as session:
-            # Scoped delete for existing document subgraph
+            # For single-document mode: clear ALL previous documents to prevent mixing
             session.run(
                 """
-                MATCH (d:Document {title: $title})
+                MATCH (d:Document)
                 OPTIONAL MATCH (d)-[:CONTAINS]->(s:Section)
                 OPTIONAL MATCH (s)-[:HAS_CHUNK]->(c:Chunk)
                 DETACH DELETE c, s, d
-                """,
-                title=title,
+                """
             )
-            logger.info(f"Cleared existing subgraph for document '{title}' if present")
+            logger.info("Cleared ALL existing documents for single-document processing")
+            
+            # Alternative scoped delete (if needed for multi-document mode later):
+            # session.run(
+            #     """
+            #     MATCH (d:Document {title: $title})
+            #     OPTIONAL MATCH (d)-[:CONTAINS]->(s:Section)
+            #     OPTIONAL MATCH (s)-[:HAS_CHUNK]->(c:Chunk)
+            #     DETACH DELETE c, s, d
+            #     """,
+            #     title=title,
+            # )
 
             # Ensure document node
             session.run(

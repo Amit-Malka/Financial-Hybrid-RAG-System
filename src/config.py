@@ -1,5 +1,12 @@
+import os
+
+# Disable ChromaDB telemetry completely - must be set before any ChromaDB imports
+os.environ["ANONYMIZED_TELEMETRY"] = "False"
+os.environ["CHROMA_TELEMETRY"] = "False" 
+os.environ["CHROMA_DISABLE_TELEMETRY"] = "True"
+
 class Config:
-    # Core settings
+    # Core settings (increased for better financial document processing)
     CHUNK_SIZE = 400
     CHUNK_OVERLAP = 50
     
@@ -12,6 +19,15 @@ class Config:
     FINANCIAL_10Q_TERMS = {
         # Core financial
         'revenue', 'assets', 'liabilities', 'equity', 'cash_flow',
+        # Debt and financing terms (CRITICAL for debt retrieval)
+        'debt', 'term_debt', 'borrowings', 'notes_payable', 'bonds',
+        'long_term_debt', 'short_term_debt', 'current_liabilities', 'total_debt',
+        'credit_facilities', 'loans', 'finance_lease', 'operating_lease',
+        'lease_liabilities', 'principal_amount', 'maturity', 'interest_expense',
+        'weighted_average', 'basis_point', 'fair_value', 'corporate_debt',
+        # Balance sheet terms
+        'balance_sheet', 'consolidated_balance', 'statement_financial_position',
+        'current_assets', 'non_current', 'stockholders_equity', 'retained_earnings',
         # 10-Q specific
         'quarterly', 'interim', 'unaudited', 'condensed',
         'yoy', 'quarter_over_quarter', 'guidance', 'outlook',
@@ -19,12 +35,16 @@ class Config:
         'md_a', 'risk_factors', 'forward_looking', 'material',
         # Monetization metrics
         'cost_per_click', 'paid_clicks', 'impressions', 'monetization',
-        'cost_per_impression', 'click_through_rate', 'advertising'
+        'cost_per_impression', 'click_through_rate', 'advertising',
+        # Strategic partnerships and alliances
+        'partnership', 'strategic_partnership', 'alliance', 'joint_venture',
+        'collaboration', 'openai', 'funding_commitment', 'investment',
+        'billion_commitment', 'strategic_alliance', 'partner', 'agreement'
     }
     
-    # Simple TF-IDF settings
-    MAX_FEATURES = 5000
-    FINANCIAL_BOOST = 2.0
+    # Enhanced TF-IDF settings for financial documents
+    MAX_FEATURES = 8000  # Increased to accommodate bigrams and financial terms
+    FINANCIAL_BOOST = 2.5  # Slightly higher boost for financial terms
     
     # Tools routing keywords
     TABLE_KEYWORDS = ['revenue', 'income', 'balance', 'cash_flow', 'financial_statement',
@@ -56,7 +76,7 @@ class Config:
 
     # Chunking behavior
     # If True, use section-aware semantic chunking; otherwise, legacy 1:1 element wrapping
-    USE_SECTION_AWARE_CHUNKING = False
+    USE_SECTION_AWARE_CHUNKING = True
 
     # Graph SIMILAR_TO enhancement
     ENABLE_SIMILAR_TO = False

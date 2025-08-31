@@ -5,33 +5,51 @@ import logging
 from collections import Counter
 from ..config import Config
 
-def chunk_document(elements: list[AbstractSemanticElement]) -> list[Document]:
+def chunk_document(elements: list[AbstractSemanticElement], *, document_title: str = None) -> list[Document]:
     """Builds chunks from SEC semantic elements.
 
     - Default: preserves existing 1:1 element→chunk behavior to maintain backward compatibility.
     - If Config.USE_SECTION_AWARE_CHUNKING is True: creates section-aware semantic chunks
       that never cross top-level section boundaries, target Config.CHUNK_SIZE, and apply
       Config.CHUNK_OVERLAP within the same section.
+    
+    Args:
+        elements: List of semantic elements from SEC parser
+        document_title: Document identifier for scoping/isolation
     """
     logger = logging.getLogger("processing.chunker")
 
     if getattr(Config, "USE_SECTION_AWARE_CHUNKING", False):
-        return _build_section_aware_chunks(elements, logger)
+        return _build_section_aware_chunks(elements, logger, document_title=document_title)
 
     # Fallback to 1:1 element wrapping (legacy behavior)
     chunks: list[Document] = []
     for i, element in enumerate(elements):
         metadata = {"element_type": element.__class__.__name__}
         metadata["chunk_id"] = f"{Config.CHUNK_ID_PREFIX}{i}"
+        
+        # Add document title for isolation
+        if document_title:
+            metadata["document_title"] = document_title
+            
         page_number = getattr(element, "page_number", None)
         if page_number is not None:
             metadata["page_number"] = page_number
+        else:
+            # Ensure page_number always exists to prevent Neo4j warnings
+            metadata["page_number"] = 1
+            
         section_path = getattr(element, "section_path", None)
         if section_path is not None:
             metadata["section_path"] = section_path
+        else:
+            metadata["section_path"] = ""
+            
         content_type = getattr(element, "content_type", None)
         if content_type is not None:
             metadata["content_type"] = content_type
+        else:
+            metadata["content_type"] = "unknown"
 
         text_content = extract_element_text(element)
         if len(text_content.strip()) < 10:
@@ -46,7 +64,7 @@ def chunk_document(elements: list[AbstractSemanticElement]) -> list[Document]:
     )
     return chunks
 
-def _build_section_aware_chunks(elements: list[AbstractSemanticElement], logger: logging.Logger) -> list[Document]:
+def _build_section_aware_chunks(elements: list[AbstractSemanticElement], logger: logging.Logger, *, document_title: str = None) -> list[Document]:
     """Create section-aware semantic chunks using size and overlap from Config.
 
     Rules:
@@ -126,9 +144,13 @@ def _build_section_aware_chunks(elements: list[AbstractSemanticElement], logger:
                 "chunk_id": f"{Config.CHUNK_ID_PREFIX}{running_chunk_index}",
                 "section_path": section_path_value,
                 "content_type": content_type_value,
+                "page_number": page_min if page_min is not None else 1,  # Ensure always populated
             }
-            if page_min is not None:
-                metadata["page_number"] = page_min
+            
+            # Add document title for isolation
+            if document_title:
+                metadata["document_title"] = document_title
+                
             if pages:
                 metadata["pages"] = sorted(set(pages))
 

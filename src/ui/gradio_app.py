@@ -3,6 +3,10 @@ import os
 import shutil
 import logging
 import time
+
+# Fix ChromaDB telemetry errors
+os.environ["ANONYMIZED_TELEMETRY"] = "False"
+
 from ..logging_setup import initialize_logging
 from ..tools.router import route_query
 from ..tools.general_tool import GeneralTool
@@ -21,6 +25,7 @@ from ..evaluation.ragas_evaluation import evaluate_ragas
 from ..evaluation.deepeval_evaluation import evaluate_deepeval
 from ..config import Config
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 from langchain_core.documents import Document
 from langchain.retrievers.contextual_compression import ContextualCompressionRetriever
 from langchain_cohere import CohereRerank
@@ -36,32 +41,114 @@ ensemble_retriever = None
 neo4j_graph_instance = None
 last_doc_title = None
 global_google_api_key = ""
+global_openai_api_key = ""
 global_cohere_api_key = ""
+global_neo4j_uri = ""
+global_neo4j_user = ""
+global_neo4j_password = ""
+last_answer = ""
+last_context = []
+last_question = ""
+
+def get_configured_llm():
+    """Get configured LLM based on available API keys."""
+    # Prefer Google Gemini if available
+    if global_google_api_key:
+        os.environ["GOOGLE_API_KEY"] = global_google_api_key
+        return ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite"), "google"
+    
+    # Fallback to OpenAI if available
+    elif global_openai_api_key:
+        os.environ["OPENAI_API_KEY"] = global_openai_api_key
+        return ChatOpenAI(model="gpt-4o-mini", temperature=0.1), "openai"
+    
+    else:
+        raise ValueError("No API keys configured. Please set Google or OpenAI API key.")
+
+def set_all_api_keys(google_key, openai_key, cohere_key, neo4j_uri, neo4j_user, neo4j_password):
+    """Centralized API key configuration for all services."""
+    global global_google_api_key, global_openai_api_key, global_cohere_api_key
+    global global_neo4j_uri, global_neo4j_user, global_neo4j_password
+    
+    # Update all global variables
+    global_google_api_key = google_key.strip() if google_key else ""
+    global_openai_api_key = openai_key.strip() if openai_key else ""
+    global_cohere_api_key = cohere_key.strip() if cohere_key else ""
+    global_neo4j_uri = neo4j_uri.strip() if neo4j_uri else ""
+    global_neo4j_user = neo4j_user.strip() if neo4j_user else ""
+    global_neo4j_password = neo4j_password.strip() if neo4j_password else ""
+    
+    # Set environment variables for immediate use
+    if global_google_api_key:
+        os.environ["GOOGLE_API_KEY"] = global_google_api_key
+    if global_openai_api_key:
+        os.environ["OPENAI_API_KEY"] = global_openai_api_key
+    if global_cohere_api_key:
+        os.environ["COHERE_API_KEY"] = global_cohere_api_key
+    
+    # Build status message
+    configured_services = []
+    if global_google_api_key:
+        configured_services.append("✅ Google API (Gemini)")
+    if global_openai_api_key:
+        configured_services.append("✅ OpenAI API (GPT)")
+    if global_cohere_api_key:
+        configured_services.append("✅ Cohere API (Reranker)")
+    if global_neo4j_uri and global_neo4j_user and global_neo4j_password:
+        configured_services.append("✅ Neo4j Database")
+    
+    if configured_services:
+        status = f"**🔑 Configuration Saved Successfully!**\n\n{chr(10).join(configured_services)}\n\n🌟 All services are now configured globally for all operations!"
+    else:
+        status = "⚠️ **No services configured.** Please provide at least one API key or database configuration."
+    
+    logger.info(f"API configuration updated: {len(configured_services)} services configured")
+    return status
 
 def clear_global_state():
     """Clear global state and close any active resources."""
-    global elements, chunks, ensemble_retriever, neo4j_graph_instance, last_doc_title, global_google_api_key, global_cohere_api_key
+    global elements, chunks, ensemble_retriever, neo4j_graph_instance, last_doc_title
+    global global_google_api_key, global_openai_api_key, global_cohere_api_key
+    global global_neo4j_uri, global_neo4j_user, global_neo4j_password, last_answer, last_context, last_question
     elements = []
     chunks = []
     ensemble_retriever = None
     last_doc_title = None
     global_google_api_key = ""
+    global_openai_api_key = ""
     global_cohere_api_key = ""
+    global_neo4j_uri = ""
+    global_neo4j_user = ""
+    global_neo4j_password = ""
+    last_answer = ""
+    last_context = []
+    last_question = ""
     if neo4j_graph_instance:
         try:
             neo4j_graph_instance.close()
         except Exception:
             logger.warning("Failed to close Neo4j graph instance during cleanup")
         neo4j_graph_instance = None
+        
+    # Clear any ChromaDB persistence directories for single-document mode
+    try:
+        chroma_dirs = ["./chroma_db", "./chroma", "./.chroma"]
+        for chroma_dir in chroma_dirs:
+            if os.path.exists(chroma_dir):
+                shutil.rmtree(chroma_dir)
+                logger.info(f"Cleared ChromaDB directory: {chroma_dir}")
+    except Exception as e:
+        logger.warning(f"Error clearing ChromaDB directories: {e}")
+        
     return "✅ Global state cleared successfully!"
 
-def process_file_with_progress(file, progress=gr.Progress()):
+def process_file_with_progress(file):
     """Enhanced file processing with progress tracking."""
     global elements, chunks, ensemble_retriever, last_doc_title
     logger.info("process_file called")
     
     if file is not None:
-        progress(0.1, desc="🔄 Starting file upload...")
+        yield "🔄 **Step 1/5:** Starting file upload..."
         time.sleep(0.5)
         
         # Determine source path (supports gradio file object or direct filepath)
@@ -70,7 +157,7 @@ def process_file_with_progress(file, progress=gr.Progress()):
             logger.error("Invalid file input: missing path/name")
             return "❌ Invalid file input."
 
-        progress(0.2, desc="📁 Saving uploaded file...")
+        yield "📁 **Step 2/5:** Saving uploaded file..."
         # Save/copy the uploaded file to project uploads dir
         os.makedirs(os.path.join("data", "uploads"), exist_ok=True)
         upload_path = os.path.join("data", "uploads", os.path.basename(src_path))
@@ -80,7 +167,7 @@ def process_file_with_progress(file, progress=gr.Progress()):
 
         logger.info(f"Copy complete to {upload_path}")
 
-        progress(0.4, desc="🔄 Converting PDF to HTML...")
+        yield "🔄 **Step 3/5:** Converting PDF to HTML..."
         # Convert PDF to HTML
         html_content = convert_pdf_to_html(upload_path)
         html_path = upload_path + ".html"
@@ -90,24 +177,24 @@ def process_file_with_progress(file, progress=gr.Progress()):
 
         logger.info(f"PDF converted to HTML at {html_path}")
 
-        progress(0.6, desc="📄 Parsing document elements...")
+        yield "📄 **Step 4/5:** Parsing document elements..."
         # Parse the document
         elements = load_html(html_path)
         time.sleep(0.5)
 
         logger.info(f"Parsed {len(elements)} elements")
 
-        progress(0.8, desc="✂️ Creating document chunks...")
-        # Chunk the document
-        chunks = chunk_document(elements)
+        yield "✂️ **Step 5/5:** Creating document chunks..."
+        # Stash title for graph scoping and isolation
+        last_doc_title = os.path.basename(html_path)
+        
+        # Chunk the document with title for isolation
+        chunks = chunk_document(elements, document_title=last_doc_title)
         time.sleep(0.5)
 
-        logger.info(f"Created {len(chunks)} chunks")
+        logger.info(f"Created {len(chunks)} chunks for document: {last_doc_title}")
 
-        # Stash title for graph scoping
-        last_doc_title = os.path.basename(html_path)
-
-        progress(0.95, desc="🔗 Building ensemble retrievers...")
+        yield "🔗 **Building ensemble retrievers...**"
         # Create retrievers with graph enhancement per specification
         dense_retriever = get_dense_retriever(chunks)
         sparse_retriever = Financial10QRetriever(chunks)
@@ -116,37 +203,41 @@ def process_file_with_progress(file, progress=gr.Progress()):
         logger.info("Graph-enhanced ensemble retriever created per specification")
         time.sleep(0.5)
 
-        progress(1.0, desc="✅ File processed successfully!")
-        return f"✅ **File processed successfully!**\n\n📊 **Statistics:**\n- Elements parsed: {len(elements)}\n- Chunks created: {len(chunks)}\n- Retriever: Graph-enhanced ensemble ready"
-    
-    return "⚠️ Please upload a file first."
+        yield f"✅ **File processed successfully!**\n\n📊 **Statistics:**\n- Elements parsed: {len(elements)}\n- Chunks created: {len(chunks)}\n- Retriever: Graph-enhanced ensemble ready"
+    else:
+        yield "⚠️ Please upload a file first."
 
-def add_to_graph_with_progress(neo4j_uri, neo4j_user, neo4j_password, progress=gr.Progress()):
-    """Enhanced graph connection with progress tracking."""
+def add_to_graph_with_progress():
+    """Enhanced graph processing with progress tracking using global Neo4j configuration."""
     global neo4j_graph_instance, ensemble_retriever, elements, chunks, last_doc_title
     logger.info("add_to_graph called")
     
     if not elements:
-        return "⚠️ Please process a file first."
+        yield "⚠️ Please process a file first."
+        return
+    
+    if not (global_neo4j_uri and global_neo4j_user and global_neo4j_password):
+        yield "⚠️ **Neo4j configuration missing.** Please configure Neo4j settings in the API Configuration popup."
+        return
     
     try:
-        progress(0.2, desc="🔗 Connecting to Neo4j...")
+        yield "🔗 **Step 1/4:** Connecting to Neo4j..."
         time.sleep(0.5)
         
         # Ensure chunks exist (recompute if needed)
         if not chunks:
-            progress(0.4, desc="✂️ Recomputing chunks...")
-            chunks = chunk_document(elements)
+            yield "✂️ **Step 2/4:** Recomputing chunks..."
+            chunks = chunk_document(elements, document_title=last_doc_title)
             time.sleep(0.5)
 
-        progress(0.6, desc="📊 Creating graph structure...")
+        yield "📊 **Step 3/4:** Processing file to graph database..."
         # Create and populate graph from CHUNKS to guarantee chunk_id parity
-        neo4j_graph_instance = Neo4jGraph(neo4j_uri, neo4j_user, neo4j_password)
+        neo4j_graph_instance = Neo4jGraph(global_neo4j_uri, global_neo4j_user, global_neo4j_password)
         doc_title = last_doc_title or 'ProcessedDocument'
         neo4j_graph_instance.add_document_structure(chunks, doc_title=doc_title)
         time.sleep(1)
         
-        progress(0.9, desc="🔄 Updating retrievers...")
+        yield "🔄 **Step 4/4:** Updating retrievers with graph enhancement..."
         # Recreate ensemble retriever with graph integration
         if ensemble_retriever:
             # Get base retrievers and recreate with graph
@@ -158,43 +249,47 @@ def add_to_graph_with_progress(neo4j_uri, neo4j_user, neo4j_password, progress=g
             logger.info("Retriever updated with graph integration")
         time.sleep(0.5)
         
-        progress(1.0, desc="✅ Graph integration complete!")
-        return "✅ **Document structure added to graph and retriever enhanced!**\n\n🔗 Graph database is now connected and integrated with the retrieval system."
+        yield "✅ **Document processed to graph database successfully!**\n\n🔗 Graph database is now connected and retrieval system enhanced with graph relationships."
         
     except Exception as e:
-        logger.error(f"Graph integration failed: {e}")
-        return f"❌ **Failed to add to graph:** {e}"
+        logger.error(f"Graph processing failed: {e}")
+        yield f"❌ **Failed to process to graph database:** {e}"
 
-def answer_question_with_progress(question, use_reranker, progress=gr.Progress()):
-    """Enhanced question answering with progress tracking."""
+def answer_question_with_progress(question, use_reranker):
+    """Enhanced question answering with progress tracking using centralized API configuration."""
+    global last_answer, last_context, last_question
     try:
         if not elements:
-            return "⚠️ Please process a file first."
+            yield "⚠️ Please process a file first."
+            return
 
-        progress(0.1, desc="🔧 Initializing models...")
+        yield "🔧 **Step 1/5:** Initializing models..."
         time.sleep(0.3)
         
-        # Set keys in environment from global once
-        if global_google_api_key:
-            os.environ["GOOGLE_API_KEY"] = global_google_api_key
+        # Get configured LLM using centralized configuration
+        try:
+            langchain_llm, llm_provider = get_configured_llm()
+            llama_llm = LangchainLLM(langchain_llm)
+            logger.info(f"Using LLM provider: {llm_provider}")
+        except ValueError as e:
+            return f"❌ **Configuration Error:** {e}"
 
-        logger.debug("Initializing ChatGoogleGenerativeAI model")
-        langchain_llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite")
-        llama_llm = LangchainLLM(langchain_llm)
-
-        progress(0.3, desc="🔍 Setting up retrievers...")
+        yield "🔍 **Step 2/5:** Setting up retrievers..."
         retriever = ensemble_retriever
         if use_reranker:
             logger.debug("Enabling Cohere reranker")
             if global_cohere_api_key:
                 os.environ["COHERE_API_KEY"] = global_cohere_api_key
-            reranker = CohereRerank(model="rerank-english-v3.0")
-            retriever = ContextualCompressionRetriever(
-                base_compressor=reranker, base_retriever=ensemble_retriever
-            )
+                reranker = CohereRerank(model="rerank-english-v3.0")
+                retriever = ContextualCompressionRetriever(
+                    base_compressor=reranker, base_retriever=ensemble_retriever
+                )
+            else:
+                logger.warning("Reranker requested but Cohere API key not configured")
+                retriever = ensemble_retriever
         time.sleep(0.3)
 
-        progress(0.5, desc="🛠️ Initializing tools...")
+        yield "🛠️ **Step 3/5:** Initializing tools..."
         # Initialize tools
         logger.debug("Initializing tools")
         general_tool = GeneralTool(retriever, langchain_llm)
@@ -210,38 +305,44 @@ def answer_question_with_progress(question, use_reranker, progress=gr.Progress()
         }
         time.sleep(0.3)
 
-        progress(0.7, desc="🎯 Routing question...")
+        yield "🎯 **Step 4/5:** Routing question..."
         tool_name = route_query(question)
         tool = tools[tool_name]
         logger.info(f"ROUTING: Question '{question}' routed to tool: {tool_name}")
         time.sleep(0.2)
         
-        progress(0.9, desc="💭 Generating answer...")
+        yield "💭 **Step 5/5:** Generating answer..."
         # Execute tool and get answer
         answer = tool.execute(question)
         
-        progress(1.0, desc="✅ Answer ready!")
+        # Store question, answer and context for evaluation
+        last_question = question
+        last_answer = answer
+        last_context = retriever.get_relevant_documents(question)
         
-        return f"**🎯 Routed to:** {tool_name.replace('_', ' ').title()}\n\n**📝 Answer:**\n\n{answer}"
+        yield f"**🎯 Routed to:** {tool_name.replace('_', ' ').title()}\n**🤖 LLM Provider:** {llm_provider.title()}\n\n**📝 Answer:**\n\n{answer}"
         
     except Exception as e:
         logger.exception("answer_question failed")
-        return f"❌ **Error:** {e}"
+        yield f"❌ **Error:** {e}"
 
-def generate_summary_with_progress(progress=gr.Progress()):
+def generate_summary_with_progress():
     """Generate comprehensive 10-Q summarization with progress tracking."""
     logger.info("generate_summary called")
     if not elements:
-        return "⚠️ Please process a file first."
+        yield "⚠️ Please process a file first."
+        return
 
     try:
-        progress(0.1, desc="🔧 Initializing analysis tools...")
-        if global_google_api_key:
-            os.environ["GOOGLE_API_KEY"] = global_google_api_key
-
-        # Use correct model version
-        langchain_llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite")
-        llama_llm = LangchainLLM(langchain_llm)
+        yield "🔧 **Step 1/5:** Initializing analysis tools..."
+        
+        # Get configured LLM using centralized configuration
+        try:
+            langchain_llm, llm_provider = get_configured_llm()
+            llama_llm = LangchainLLM(langchain_llm)
+            logger.info(f"Using LLM provider for summary: {llm_provider}")
+        except ValueError as e:
+            return f"❌ **Configuration Error:** {e}"
 
         # Use specialized tools instead of raw text processing
         mda_tool = MDATool(langchain_llm, elements)
@@ -255,7 +356,7 @@ def generate_summary_with_progress(progress=gr.Progress()):
         # Generate targeted summaries for each section
         sections_summary = {}
 
-        progress(0.25, desc="💰 Analyzing financial performance...")
+        yield "💰 **Step 2/5:** Analyzing financial performance..."
         # Financial Performance Summary (using TableTool)
         try:
             financial_summary = table_tool.execute(
@@ -268,7 +369,7 @@ def generate_summary_with_progress(progress=gr.Progress()):
             sections_summary["financial_performance"] = "Financial summary not available due to processing error."
         time.sleep(0.5)
 
-        progress(0.50, desc="📈 Processing MD&A section...")
+        yield "📈 **Step 3/5:** Processing MD&A section..."
         # Management Discussion & Analysis Summary (using MDATool)
         try:
             mda_summary = mda_tool.execute(
@@ -281,7 +382,7 @@ def generate_summary_with_progress(progress=gr.Progress()):
             sections_summary["mda_analysis"] = "MD&A summary not available due to processing error."
         time.sleep(0.5)
 
-        progress(0.75, desc="⚠️ Extracting risk factors...")
+        yield "⚠️ **Step 4/5:** Extracting risk factors..."
         # Risk Factors Summary (using RiskTool)
         try:
             risk_summary = risk_tool.execute(
@@ -294,7 +395,7 @@ def generate_summary_with_progress(progress=gr.Progress()):
             sections_summary["risk_factors"] = "Risk factors summary not available due to processing error."
         time.sleep(0.5)
 
-        progress(0.90, desc="🏢 Analyzing business operations...")
+        yield "🏢 **Step 5/5:** Analyzing business operations..."
         # Business Operations Summary (using GeneralTool)
         try:
             business_summary = general_tool.execute(
@@ -306,8 +407,6 @@ def generate_summary_with_progress(progress=gr.Progress()):
             logger.error(f"Business summary failed: {e}")
             sections_summary["business_operations"] = "Business operations summary not available due to processing error."
         time.sleep(0.5)
-
-        progress(1.0, desc="✅ Summary complete!")
 
         # Create structured comprehensive summary
         comprehensive_summary = f"""# 📊 10-Q Quarterly Report - Comprehensive Summary
@@ -331,53 +430,64 @@ This quarterly report analysis leverages hybrid retrieval with financial domain 
 """
 
         logger.info("Comprehensive 10-Q summary generated successfully")
-        return comprehensive_summary
+        yield comprehensive_summary
 
     except Exception as e:
         logger.error(f"Summary generation failed: {e}")
-        return f"❌ **Summary generation failed:** {e}\n\n🔧 **Please check:**\n1. Google API key is valid\n2. Document is properly processed\n3. Internet connection is stable"
+        yield f"❌ **Summary generation failed:** {e}\n\n🔧 **Please check:**\n1. Google API key is valid\n2. Document is properly processed\n3. Internet connection is stable"
 
-def query_tables_with_progress(question, progress=gr.Progress()):
+def query_tables_with_progress(question):
     """Enhanced table queries with progress tracking."""
     logger.info("query_tables called")
     if not elements:
-        return "⚠️ Please process a file first."
+        yield "⚠️ Please process a file first."
+        return
     
     try:
-        progress(0.2, desc="🔧 Initializing table analysis...")
-        if global_google_api_key:
-            os.environ["GOOGLE_API_KEY"] = global_google_api_key
-        langchain_llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite")
-        llama_llm = LangchainLLM(langchain_llm)
+        yield "🔧 **Step 1/4:** Initializing table analysis..."
+        
+        # Get configured LLM using centralized configuration
+        try:
+            langchain_llm, llm_provider = get_configured_llm()
+            llama_llm = LangchainLLM(langchain_llm)
+            logger.info(f"Using LLM provider for table analysis: {llm_provider}")
+        except ValueError as e:
+            yield f"❌ **Configuration Error:** {e}"
+            return
         time.sleep(0.5)
         
-        progress(0.6, desc="📊 Analyzing financial tables...")
+        yield "📊 **Step 2/4:** Analyzing financial tables..."
         # Force routing to table tool
         table_tool = TableTool(ensemble_retriever, llama_llm, elements)
         time.sleep(0.8)
         
-        progress(0.9, desc="💭 Generating insights...")
+        yield "💭 **Step 3/4:** Generating insights..."
         answer = table_tool.execute(question)
         time.sleep(0.3)
         
-        progress(1.0, desc="✅ Table analysis complete!")
-        return f"**📊 Table Analysis Results:**\n\n{answer}"
+        yield f"**📊 Table Analysis Results:**\n\n{answer}"
         
     except Exception as e:
         logger.error(f"Table query failed: {e}")
-        return f"❌ **Table query failed:** {e}"
+        yield f"❌ **Table query failed:** {e}"
 
-def financial_analysis_with_progress(progress=gr.Progress()):
+def financial_analysis_with_progress():
     """Enhanced financial analysis with progress tracking."""
     logger.info("financial_analysis called")
     if not elements:
-        return "⚠️ Please process a file first."
+        yield "⚠️ Please process a file first."
+        return
 
     try:
-        progress(0.1, desc="🔧 Initializing analysis tools...")
-        if global_google_api_key:
-            os.environ["GOOGLE_API_KEY"] = global_google_api_key
-        langchain_llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite")
+        yield "🔧 **Step 1/4:** Initializing analysis tools..."
+        
+        # Get configured LLM using centralized configuration
+        try:
+            langchain_llm, llm_provider = get_configured_llm()
+            logger.info(f"Using LLM provider for financial analysis: {llm_provider}")
+        except ValueError as e:
+            yield f"❌ **Configuration Error:** {e}"
+            return
 
         # Use specialized tools for analysis with improved fallback
         mda_tool = MDATool(langchain_llm, elements)
@@ -386,7 +496,7 @@ def financial_analysis_with_progress(progress=gr.Progress()):
         logger.info("Starting specialized financial analysis with improved tools")
         time.sleep(0.5)
 
-        progress(0.4, desc="📈 Analyzing MD&A section...")
+        yield "📈 **Step 2/4:** Analyzing MD&A section..."
         # Generate comprehensive analysis with specific queries
         try:
             mda_analysis = mda_tool.execute("What are the key financial performance trends and management outlook? Include revenue growth, profitability metrics, operating margins, and forward-looking statements from management.")
@@ -396,7 +506,7 @@ def financial_analysis_with_progress(progress=gr.Progress()):
             mda_analysis = f"MD&A analysis unavailable: {str(e)}"
         time.sleep(1)
 
-        progress(0.8, desc="⚠️ Evaluating risk factors...")
+        yield "⚠️ **Step 3/4:** Evaluating risk factors..."
         try:
             risk_analysis = risk_tool.execute("What are the primary risk factors and uncertainties facing the company? Include contractual obligations, pending acquisitions, regulatory risks, and market challenges.")
             logger.info("Risk analysis completed successfully")
@@ -405,7 +515,7 @@ def financial_analysis_with_progress(progress=gr.Progress()):
             risk_analysis = f"Risk analysis unavailable: {str(e)}"
         time.sleep(1)
 
-        progress(1.0, desc="✅ Financial analysis complete!")
+        yield "📝 **Step 4/4:** Generating comprehensive analysis..."
 
         # Create comprehensive analysis
         analysis = f"""# 🏦 Financial Health Assessment
@@ -423,38 +533,207 @@ This analysis combines management's discussion of financial performance with ide
 """
 
         logger.info("Financial analysis completed successfully")
-        return analysis
+        yield analysis
 
     except Exception as e:
         logger.error(f"Financial analysis failed: {e}")
-        return f"❌ **Financial analysis failed:** {e}\n\n🔧 **Please check:**\n1. Google API key is valid\n2. Document is properly processed\n3. Internet connection is stable"
+        yield f"❌ **Financial analysis failed:** {e}\n\n🔧 **Please check:**\n1. Google API key is valid\n2. Document is properly processed\n3. Internet connection is stable"
 
-def run_evaluation_with_progress(question, ground_truth, use_reranker, progress=gr.Progress()):
-    """Enhanced evaluation with progress tracking."""
-    progress(0.2, desc="🔧 Setting up evaluation...")
-    # Ensure keys available in env
-    if global_google_api_key:
-        os.environ["GOOGLE_API_KEY"] = global_google_api_key
-    if global_cohere_api_key:
-        os.environ["COHERE_API_KEY"] = global_cohere_api_key
+def format_evaluation_display(result):
+    """Format evaluation results for HTML display with reasons and scores."""
+    if not result or result.get("error"):
+        error_msg = result.get("error", "Unknown error") if isinstance(result, dict) else str(result)
+        reasons_html = f'<div style="color: red; padding: 15px; border: 1px solid #ff6b6b; border-radius: 5px; background: #ffe0e0;">❌ {error_msg}</div>'
+        scores_html = '<div style="text-align: center; color: #666;">No scores available</div>'
+        return reasons_html, scores_html
+    
+    # Extract reasons and scores
+    reasons = result.get("reasons", {})
+    scores = {
+        "Context Precision": result.get("context_precision", 0.0),
+        "Context Recall": result.get("context_recall", 0.0),
+        "Faithfulness": result.get("faithfulness", 0.0),
+        "Answer Relevancy": result.get("answer_relevancy", 0.0),
+        "Overall Score": result.get("overall_score", 0.0)
+    }
+    
+    # Build reasons HTML (left column)
+    reasons_html = '<div style="font-size: 14px; line-height: 1.6;">'
+    
+    metric_names = {
+        "context_precision": "🎯 Context Precision",
+        "context_recall": "🔍 Context Recall", 
+        "faithfulness": "✅ Faithfulness",
+        "answer_relevancy": "🎪 Answer Relevancy"
+    }
+    
+    for key, title in metric_names.items():
+        reason = reasons.get(key, "No explanation available")
+        score = scores[title.split(" ", 1)[1]]  # Remove emoji for lookup
+        
+        # Color based on score
+        if score >= 0.8:
+            color = "#22c55e"  # Green
+        elif score >= 0.6:
+            color = "#f59e0b"  # Yellow  
+        else:
+            color = "#ef4444"  # Red
+            
+        reasons_html += f'''
+        <div style="margin-bottom: 20px; padding: 12px; border-left: 4px solid {color}; background: #f8fafc;">
+            <h5 style="margin: 0 0 8px 0; color: {color}; font-weight: 600;">{title}</h5>
+            <p style="margin: 0; color: #64748b; font-size: 13px;">{reason}</p>
+        </div>
+        '''
+    
+    reasons_html += '</div>'
+    
+    # Build scores HTML (right column)
+    scores_html = '<div style="text-align: center;">'
+    
+    for key, title in metric_names.items():
+        score = scores[title.split(" ", 1)[1]]  # Remove emoji for lookup
+        percentage = f"{score:.1%}"
+        
+        # Color and styling based on score
+        if score >= 0.8:
+            color = "#22c55e"
+            bg_color = "#dcfce7"
+        elif score >= 0.6:
+            color = "#f59e0b"
+            bg_color = "#fef3c7"
+        else:
+            color = "#ef4444"
+            bg_color = "#fee2e2"
+            
+        scores_html += f'''
+        <div style="margin: 10px 0; padding: 15px; background: {bg_color}; border-radius: 8px; border: 1px solid {color};">
+            <div style="font-weight: 600; color: {color}; margin-bottom: 5px;">{title}</div>
+            <div style="font-size: 24px; font-weight: bold; color: {color};">{percentage}</div>
+        </div>
+        '''
+    
+    # Overall score
+    overall = scores["Overall Score"]
+    overall_percentage = f"{overall:.1%}"
+    if overall >= 0.8:
+        overall_color = "#22c55e"
+        overall_bg = "#dcfce7"
+    elif overall >= 0.6:
+        overall_color = "#f59e0b"
+        overall_bg = "#fef3c7"
+    else:
+        overall_color = "#ef4444"
+        overall_bg = "#fee2e2"
+        
+    scores_html += f'''
+    <div style="margin: 20px 0 10px 0; padding: 20px; background: {overall_bg}; border-radius: 10px; border: 2px solid {overall_color};">
+        <div style="font-weight: bold; color: {overall_color}; margin-bottom: 8px; font-size: 16px;">🏆 Overall Score</div>
+        <div style="font-size: 32px; font-weight: bold; color: {overall_color};">{overall_percentage}</div>
+    </div>
+    '''
+    
+    scores_html += '</div>'
+    
+    return reasons_html, scores_html
+
+def run_evaluation_with_progress(ground_truth):
+    """Enhanced integrated evaluation using existing answer and context."""
+    global last_answer, last_context, last_question
+    
+    # 🔍 DEBUG: Trace the complete evaluation flow
+    logger.critical("🔍 EVALUATION DEBUG START")
+    logger.critical(f"🔍 Ground truth: {ground_truth[:50] if ground_truth else 'None'}...")
+    logger.critical(f"🔍 Last answer available: {bool(last_answer)}")
+    logger.critical(f"🔍 Last context available: {bool(last_context)}")
+    logger.critical(f"🔍 Global Google API key available: {bool(global_google_api_key and global_google_api_key.strip())}")
+    logger.critical(f"🔍 Global OpenAI API key available: {bool(global_openai_api_key and global_openai_api_key.strip())}")
+    
+    if not last_answer:
+        yield "⚠️ **No answer to evaluate.** Please ask a question first.", "", ""
+        return
+    
+    if not ground_truth.strip():
+        yield "⚠️ **Ground truth required.** Please enter the expected correct answer.", "", ""
+        return
+    
+    yield "🔧 **Step 1/3:** Setting up evaluation...", "", ""
+    logger.info("run_evaluation called with integrated workflow")
     time.sleep(0.5)
     
-    progress(0.5, desc="💭 Generating answer...")
-    answer, context = answer_question_and_context(question, use_reranker)
-    logger.info("run_evaluation called")
-    time.sleep(1)
+    yield "📊 **Step 2/3:** Running evaluation metrics...", "", ""
     
-    progress(0.8, desc="📊 Running evaluation metrics...")
-    # Use DeepEval only; if it fails, return just the answer and an empty metrics dict
-    result = evaluate_deepeval(question, answer, context, ground_truth, model_name="gemini-1.5-pro-002", provider="google", api_key=global_google_api_key)
-    time.sleep(0.5)
+    # Use the stored question from the last Q&A interaction
+    question = last_question if last_question else "Previous question answered by the system"
     
-    progress(1.0, desc="✅ Evaluation complete!")
+    # Determine which evaluation framework to use based on available API keys
+    result = {}
+    eval_provider = "none"
     
-    if result and not result.get("error"):
-        return f"**📝 System Answer:**\n\n{answer}", result
-    logger.error(f"DeepEval evaluation failed: {result.get('error') if isinstance(result, dict) else result}")
-    return f"**📝 System Answer:**\n\n{answer}", {}
+    try:
+        # Default to DeepEval with Gemini as preferred choice
+        logger.critical("🔍 EVALUATING API KEY PRIORITY:")
+        if global_google_api_key and global_google_api_key.strip():
+            # Priority 1: Use DeepEval with Gemini (preferred default)
+            logger.critical("🔍 ✅ USING GOOGLE API KEY - Calling DeepEval with Gemini")
+            logger.critical(f"🔍 Google API key length: {len(global_google_api_key.strip())} chars")
+            logger.critical(f"🔍 Calling evaluate_deepeval(provider='google', model='gemini-1.5-pro-002')")
+            
+            result = evaluate_deepeval(
+                question=question,
+                answer=last_answer,
+                context_docs=last_context,
+                ground_truth=ground_truth.strip(),
+                model_name="gemini-1.5-pro-002",
+                provider="google",
+                api_key=global_google_api_key.strip()
+            )
+            eval_provider = "deepeval-gemini"
+            logger.critical(f"🔍 DeepEval returned: {result}")
+            
+        elif global_openai_api_key and global_openai_api_key.strip():
+            # Priority 2: Use DeepEval with OpenAI (fallback)
+            logger.critical("🔍 ❌ NO GOOGLE KEY - Using OpenAI fallback")
+            result = evaluate_deepeval(
+                question=question,
+                answer=last_answer,
+                context_docs=last_context,
+                ground_truth=ground_truth.strip(),
+                model_name="gpt-4o-mini",
+                provider="openai",
+                api_key=global_openai_api_key.strip()
+            )
+            eval_provider = "deepeval-openai"
+            
+        else:
+            # No valid API keys configured
+            logger.critical("🔍 ❌ NO API KEYS CONFIGURED")
+            result = {
+                "error": "API key required: Please configure Google API key (preferred) or OpenAI API key in the API Configuration popup."
+            }
+            eval_provider = "no-api-key"
+            
+        time.sleep(0.5)
+        
+        if result and not result.get("error"):
+            logger.info(f"Evaluation completed successfully using {eval_provider}")
+            yield "✅ **Step 3/3:** Formatting results...", "", ""
+            time.sleep(0.3)
+            
+            # Format results for display
+            reasons_html, scores_html = format_evaluation_display(result)
+            yield f"**📊 Evaluation Results (using {eval_provider}):**", reasons_html, scores_html
+        else:
+            # DeepEval failed - show the error
+            logger.error(f"DeepEval evaluation failed: {result.get('error') if isinstance(result, dict) else result}")
+            reasons_html, scores_html = format_evaluation_display(result)
+            yield f"**❌ DeepEval evaluation failed:** {result.get('error') if isinstance(result, dict) else 'Unknown error'}", reasons_html, scores_html
+            
+    except Exception as e:
+        logger.error(f"Evaluation error: {e}")
+        error_result = {"error": str(e)}
+        reasons_html, scores_html = format_evaluation_display(error_result)
+        yield f"**❌ Evaluation error:** {e}", reasons_html, scores_html
 
 def update_weights_enhanced(dense_weight, tfidf_weight, graph_weight):
     """Enhanced weight updating with validation."""
@@ -489,24 +768,7 @@ def update_weights_enhanced(dense_weight, tfidf_weight, graph_weight):
         logger.error(f"Weight update failed: {e}")
         return f"❌ **Weight update failed:** {e}"
 
-def set_api_keys_enhanced(google_api_key: str, cohere_api_key: str):
-    """Enhanced API key setting with better feedback."""
-    global global_google_api_key, global_cohere_api_key
-    global_google_api_key = google_api_key or ""
-    global_cohere_api_key = cohere_api_key or ""
-    
-    status_parts = []
-    if global_google_api_key:
-        os.environ["GOOGLE_API_KEY"] = global_google_api_key
-        status_parts.append("✅ Google API key")
-    if global_cohere_api_key:
-        os.environ["COHERE_API_KEY"] = global_cohere_api_key
-        status_parts.append("✅ Cohere API key")
-    
-    if status_parts:
-        return f"**🔑 API Keys Configured:**\n\n{chr(10).join(status_parts)}\n\n🌟 Ready for enhanced processing!"
-    else:
-        return "⚠️ **No API keys provided.** Please enter at least one API key."
+
 
 def get_enhanced_system_info():
     """Enhanced system information display."""
@@ -801,7 +1063,7 @@ label {
 }
 """
 
-# Create the enhanced Gradio interface with simple layout
+# Create the enhanced Gradio interface with new centralized configuration
 with gr.Blocks(
     theme=gr.themes.Base(
         primary_hue="slate",
@@ -826,48 +1088,86 @@ with gr.Blocks(
     analytics_enabled=False
 ) as iface:
     
-    # API Configuration Section - ALWAYS VISIBLE AT TOP
-    gr.HTML("<h2>🔑 API Configuration</h2>")
+    # Centralized API Configuration Popup
     with gr.Row():
-        main_api_key_box = gr.Textbox(
-            label="Google API Key", 
-            type="password",
-            placeholder="Enter your Google API key...",
-            scale=2
-        )
-        main_cohere_api_key_box = gr.Textbox(
-            label="Cohere API Key", 
-            type="password", 
-            placeholder="Enter your Cohere API key...",
-            scale=2
-        )
-        set_keys_button = gr.Button("Set Keys", variant="primary", scale=1)
+        gr.HTML("<h2>🏦 Financial RAG System</h2>")
+        with gr.Column(scale=1):
+            api_config_button = gr.Button("🔑 Configure APIs", variant="primary")
     
-    keys_status = gr.Markdown()
+    config_status = gr.Markdown()
     
-    # Navigation Tabs - Simple and Clean
+    # API Configuration Modal (using gr.Column with visible=False initially)
+    with gr.Column(visible=False) as api_config_modal:
+        gr.HTML("<h3>🔑 API Configuration</h3>")
+        gr.Markdown("Configure all API keys and database connections for the entire system.")
+        
+        with gr.Row():
+            google_api_input = gr.Textbox(
+                label="Google API Key (Gemini)", 
+                type="password",
+                placeholder="Enter your Google API key for Gemini...",
+                scale=1
+            )
+            openai_api_input = gr.Textbox(
+                label="OpenAI API Key (GPT)", 
+                type="password",
+                placeholder="Enter your OpenAI API key for GPT...",
+                scale=1
+            )
+        
+        with gr.Row():
+            cohere_api_input = gr.Textbox(
+                label="Cohere API Key (Reranker)", 
+                type="password",
+                placeholder="Enter your Cohere API key for reranking...",
+                scale=1
+            )
+            neo4j_uri_input = gr.Textbox(
+                label="Neo4j URI", 
+                placeholder="bolt://localhost:7687",
+                scale=1
+            )
+        
+        with gr.Row():
+            neo4j_user_input = gr.Textbox(
+                label="Neo4j Username", 
+                placeholder="neo4j",
+                scale=1
+            )
+            neo4j_password_input = gr.Textbox(
+                label="Neo4j Password", 
+                type="password",
+                placeholder="Enter Neo4j password...",
+                scale=1
+            )
+        
+        with gr.Row():
+            save_config_button = gr.Button("💾 Save Configuration", variant="primary", scale=1)
+            cancel_config_button = gr.Button("❌ Cancel", variant="secondary", scale=1)
+    
+    # Navigation Tabs
     with gr.Tabs():
-        # Q&A Tab
-        with gr.TabItem("💬 Q&A"):
+        # Q&A Tab with Integrated Evaluation
+        with gr.TabItem("💬 Q&A & Evaluation"):
+            # Document Processing Section
             gr.HTML("<h3>📄 Document Processing</h3>")
             file_upload = gr.File(
                 file_types=[".pdf"], 
                 file_count="single", 
                 type="filepath",
-                label="Upload PDF Document"
+                label="Upload 10-Q PDF Document"
             )
             process_button = gr.Button("🚀 Process File", variant="primary")
             process_status = gr.Markdown()
             
-            gr.HTML("<h3>🔗 Graph Database (Optional)</h3>")
-            with gr.Row():
-                neo4j_uri_box = gr.Textbox(label="Neo4j URI", placeholder="bolt://localhost:7687", scale=2)
-                neo4j_user_box = gr.Textbox(label="Username", placeholder="neo4j", scale=1)
-                neo4j_password_box = gr.Textbox(label="Password", type="password", scale=1)
-            add_to_graph_button = gr.Button("Connect to Graph", variant="secondary")
+            # Graph Database Processing Section
+            gr.HTML("<h3>🗂️ Graph Database Processing (Optional)</h3>")
+            gr.Markdown("Process the uploaded document to Neo4j graph database for enhanced retrieval capabilities.")
+            process_to_graph_button = gr.Button("🗂️ Process to Graph Database", variant="secondary")
             graph_status = gr.Markdown()
             
-            gr.HTML("<h3>💬 Ask Questions</h3>")
+            # Question & Answer Section
+            gr.HTML("<h3>💬 Question & Answer</h3>")
             use_reranker_checkbox = gr.Checkbox(label="🎯 Use Reranker", value=False)
             question_box = gr.Textbox(
                 label="Your Question", 
@@ -876,6 +1176,30 @@ with gr.Blocks(
             )
             answer_button = gr.Button("💭 Get Answer", variant="primary")
             answer_box = gr.Markdown()
+            
+            # Integrated Evaluation Section
+            gr.HTML("<h3>🧪 Answer Evaluation</h3>")
+            gr.Markdown("Evaluate the system's answer against ground truth using advanced metrics.")
+            
+            ground_truth_input = gr.Textbox(
+                label="Ground Truth / Expected Answer", 
+                placeholder="Enter the correct/expected answer for evaluation...",
+                lines=3
+            )
+            evaluate_button = gr.Button("🧪 Run Evaluation", variant="primary")
+            
+            evaluation_status = gr.Markdown()
+            
+            with gr.Row():
+                # Left column: Reasoning explanations
+                with gr.Column(scale=2):
+                    gr.HTML("<h4>📝 Evaluation Explanations</h4>")
+                    evaluation_reasons = gr.HTML()
+                
+                # Right column: Metric scores
+                with gr.Column(scale=1):
+                    gr.HTML("<h4>📊 Scores</h4>")
+                    evaluation_scores = gr.HTML()
 
         # Summary Tab
         with gr.TabItem("📋 Summary"):
@@ -933,45 +1257,47 @@ with gr.Blocks(
             )
             
             update_config_button = gr.Button("💾 Update Configuration", variant="primary")
-            config_status = gr.Markdown()
+            config_weights_status = gr.Markdown()
 
-        # Evaluation Tab
-        with gr.TabItem("🧪 Evaluation"):
-            gr.HTML("<h3>🧪 Model Performance Evaluation</h3>")
-            gr.Markdown("Evaluate system performance using DeepEval metrics with ground truth comparisons.")
-            
-            eval_use_reranker = gr.Checkbox(label="🎯 Use Reranker", value=False)
-            eval_question_box = gr.Textbox(
-                label="Evaluation Question", 
-                placeholder="Enter a question to evaluate...",
-                lines=2
-            )
-            ground_truth_box = gr.Textbox(
-                label="Ground Truth Answer", 
-                placeholder="Enter the expected correct answer...",
-                lines=3
-            )
-            eval_button = gr.Button("🧪 Run Evaluation", variant="primary")
-            
-            system_answer_box = gr.Markdown()
-            eval_results_box = gr.JSON()
-
-    # Wire up all the functionality
-    set_keys_button.click(set_api_keys_enhanced, inputs=[main_api_key_box, main_cohere_api_key_box], outputs=[keys_status])
+    # API Configuration Modal Popup Logic
+    def show_api_config():
+        return gr.Column(visible=True)
     
-    # Q&A Tab
+    def hide_api_config():
+        return gr.Column(visible=False)
+    
+    api_config_button.click(show_api_config, outputs=[api_config_modal])
+    cancel_config_button.click(hide_api_config, outputs=[api_config_modal])
+    
+    # Centralized API Configuration
+    save_config_button.click(
+        set_all_api_keys,
+        inputs=[
+            google_api_input,
+            openai_api_input, 
+            cohere_api_input,
+            neo4j_uri_input,
+            neo4j_user_input,
+            neo4j_password_input
+        ],
+        outputs=[config_status]
+    ).then(hide_api_config, outputs=[api_config_modal])
+    
+    # Q&A Tab with Integrated Evaluation
     process_button.click(process_file_with_progress, inputs=[file_upload], outputs=[process_status])
-    add_to_graph_button.click(add_to_graph_with_progress, inputs=[neo4j_uri_box, neo4j_user_box, neo4j_password_box], outputs=[graph_status])
+    process_to_graph_button.click(add_to_graph_with_progress, outputs=[graph_status])
     answer_button.click(answer_question_with_progress, inputs=[question_box, use_reranker_checkbox], outputs=[answer_box])
+    evaluate_button.click(run_evaluation_with_progress, inputs=[ground_truth_input], outputs=[evaluation_status, evaluation_reasons, evaluation_scores])
     
     # Other tabs
     generate_summary_button.click(generate_summary_with_progress, outputs=[summary_output])
     query_tables_button.click(query_tables_with_progress, inputs=[table_question_box], outputs=[table_output])
     run_analysis_button.click(financial_analysis_with_progress, outputs=[analysis_output])
+    
+    # System Management
     refresh_info_button.click(get_enhanced_system_info, outputs=[system_info_output])
     cleanup_button.click(clear_global_state, outputs=[cleanup_status])
-    update_config_button.click(update_weights_enhanced, inputs=[dense_weight_slider, tfidf_weight_slider, graph_weight_slider], outputs=[config_status])
-    eval_button.click(run_evaluation_with_progress, inputs=[eval_question_box, ground_truth_box, eval_use_reranker], outputs=[system_answer_box, eval_results_box])
+    update_config_button.click(update_weights_enhanced, inputs=[dense_weight_slider, tfidf_weight_slider, graph_weight_slider], outputs=[config_weights_status])
 
 if __name__ == "__main__":
     iface.launch(
