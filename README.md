@@ -86,19 +86,6 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 4. Set Up API Keys
-Create a `.env` file in the project root:
-```bash
-# Required
-GOOGLE_API_KEY=your_google_api_key_here
-
-# Optional (for enhanced features)
-NEO4J_URI=bolt://localhost:7687
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=your_password
-COHERE_API_KEY=your_cohere_key  # For reranking
-```
-
 ## 🚀 Quick Start
 
 ### Basic Usage
@@ -203,21 +190,6 @@ We welcome contributions! For development setup:
 ## 📝 License
 
 This project is licensed under the MIT License - see the [LICENSE](docs/LICENSE) file for details.
-
-## 🙏 Acknowledgments
-
-- **SEC EDGAR** for providing public financial data
-- **Google** for Gemini language models
-- **LlamaIndex** for document processing framework
-- **LangChain** for orchestration capabilities
-- **Neo4j** for graph database technology
-
-## 📞 Support
-
-For questions, issues, or contributions:
-- **Issues**: [GitHub Issues](https://github.com/yourusername/financial-rag-system/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/yourusername/financial-rag-system/discussions)
-- **Documentation**: [Technical Documentation](docs/CODEMAP.md)
 
 ---
 
