@@ -130,6 +130,26 @@ cython_debug/
 # Data files
 data/uploads/
 data/processed/
- 
+
+# Sample data files (large PDFs - keep one small sample for demo)
+data_samples/*.pdf
+!data_samples/goog-10-q-q2-2025.pdf  # Keep small Google sample
+
 # Logs
 logs/
+
+# Evaluation framework cache
+.deepeval/
+
+# Temporary files
+*.tmp
+*.temp
+.DS_Store
+
+# IDE files
+*.swp
+*.swo
+*~
+
+# OS generated files
+Thumbs.db

@@ -1,68 +1,138 @@
-### Quickstart
+# Quick Start Guide
 
-#### Prerequisites
-- **Python**: 3.10+
-- **Shell**: Windows PowerShell 7
-- **API keys** (as needed):
-  - `GOOGLE_API_KEY` (Gemini 1.5 Flash)
-  - `COHERE_API_KEY` (only if enabling reranker)
-  - Optional: Neo4j instance (local or remote)
+## Prerequisites
 
-#### 1) Setup
-```powershell
-# From your project root
-cd C:\Development\FinalProjectBGU\FinalProjectBGU
+Before getting started, ensure you have:
 
-# Create & activate venv
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+- **Python**: Version 3.10 or higher
+- **API Keys**:
+  - Google API Key (required for Gemini LLM)
+  - Cohere API Key (optional, for reranking)
+  - Neo4j credentials (optional, for graph features)
+- **System Requirements**: At least 8GB RAM, 10GB free disk space
+
+## Installation
+
+### 1. Clone and Setup Environment
+
+```bash
+# Clone the repository
+git clone https://github.com/yourusername/financial-rag-system.git
+cd financial-rag-system
+
+# Create virtual environment
+python -m venv venv
+
+# Activate virtual environment
+# On Windows:
+venv\Scripts\activate
+# On macOS/Linux:
+source venv/bin/activate
 
 # Install dependencies
-python -m pip install --upgrade pip setuptools wheel
 pip install -r requirements.txt
-
-# Create uploads dir used by the app
-mkdir data\uploads -Force
 ```
 
-#### 2) Run the app
-```powershell
-# Inside the venv, from project root
+### 2. Configure API Keys
+
+Create a `.env` file in the project root:
+
+```bash
+# Required: Google API Key for Gemini
+GOOGLE_API_KEY=your_google_api_key_here
+
+# Optional: Cohere API Key for reranking
+COHERE_API_KEY=your_cohere_api_key_here
+
+# Optional: Neo4j for graph features
+NEO4J_URI=bolt://localhost:7687
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=your_password_here
+```
+
+## Running the Application
+
+### Start the Web Interface
+
+```bash
+# From project root with virtual environment activated
 python -m src.ui.gradio_app
 ```
-Open the Gradio URL printed in the terminal.
 
-#### 3) Use the app
-- Q&A tab:
-  - Set your Google key or export it before launching:
-    ```powershell
-    $env:GOOGLE_API_KEY = "your_key_here"
-    ```
-  - Upload a 10‑Q PDF (≤ ~50 pages), click “Process File”.
-  - Ask a question; the system routes to the appropriate tool (`general_tool`, `table_tool`, `mda_tool`, `risk_tool`).
-  - Optional reranker: toggle “Use Reranker” and provide `COHERE_API_KEY`.
-    ```powershell
-    $env:COHERE_API_KEY = "your_key_here"
-    ```
-- Add to Graph:
-  - Provide `Neo4j URI`, `User`, `Password`, then click “Add to Graph”.
-- Evaluation tab:
-  - Enter question and ground truth, click “Evaluate” for RAGAS metrics.
+The application will start and provide a local URL (typically `http://localhost:7860`).
 
-#### 4) Run tests
-```powershell
-pytest -q
+## Using the Application
+
+### 1. Basic Q&A Workflow
+
+1. **Navigate to Q&A Tab**: Open the main interface in your browser
+2. **Configure API Keys**: Enter your Google API key in the interface
+3. **Upload Document**: Upload a SEC 10-Q PDF file (under 50 pages recommended)
+4. **Process Document**: Click "Process File" to analyze and index the document
+5. **Ask Questions**: Enter questions about the financial report
+6. **Optional Features**:
+   - Toggle reranking for improved accuracy (requires Cohere API key)
+   - Add to graph database for enhanced retrieval (requires Neo4j)
+
+### 2. Specialized Features
+
+- **Table Queries**: Use the dedicated tab for questions about financial tables and numeric data
+- **Financial Analysis**: Get comprehensive analysis of financial health and risk factors
+- **Document Summary**: Generate executive summaries of the entire report
+- **System Configuration**: Adjust retrieval weights and system parameters
+
+### 3. Evaluation
+
+Use the Evaluation tab to assess system performance:
+- Enter test questions and ground truth answers
+- View RAGAS metrics (Context Precision, Recall, Faithfulness)
+- Compare system responses against expected answers
+
+## Testing
+
+Run the test suite to verify everything is working:
+
+```bash
+# Run all tests
+pytest tests/
+
+# Run with verbose output
+pytest -v tests/
+
+# Run specific test file
+pytest tests/test_retrieval.py
 ```
 
-#### 5) Notes
-- Model: uses `gemini-1.5-flash` via `langchain_google_genai`.
-- Parsing: preserves SEC semantic elements; chunking emits LangChain `Document`s with metadata (`element_type`, plus `page_number`/`section_path`/`content_type` when available).
-- Retrieval: Chroma (dense) + TF‑IDF with effective financial term boosting; combined via `EnsembleRetriever` weights from `src/config.py`.
-- Tools: `SimpleTool` invokes LLM; `TableTool` uses a LlamaIndex program for tabular answers.
-- Reranker: requires a valid `COHERE_API_KEY` when enabled.
-- If activation is blocked:
-  ```powershell
-  Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-  ```
+## Troubleshooting
+
+### Common Issues
+
+**Virtual Environment Activation Issues (Windows)**:
+```powershell
+# If activation is blocked, run:
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+```
+
+**API Key Errors**:
+- Ensure your Google API key has Gemini API access
+- Check that API keys are properly set in environment variables or the UI
+
+**Memory Issues**:
+- Close other applications if you encounter memory errors
+- Consider using smaller documents (under 30 pages) for testing
+
+**Neo4j Connection Issues**:
+- Ensure Neo4j is running and accessible
+- Verify connection credentials in the UI
+
+### Getting Help
+
+- Check the [main README](../README.md) for detailed documentation
+- Review [technical documentation](CODEMAP.md) for implementation details
+- Open an issue on GitHub for bugs or feature requests
+
+---
+
+**Remember**: This tool is for educational and research purposes. Always consult financial professionals for investment decisions.
 
 
