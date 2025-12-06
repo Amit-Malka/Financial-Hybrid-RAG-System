@@ -15,6 +15,8 @@ A sophisticated Retrieval-Augmented Generation (RAG) system designed for analyzi
 - **Data Accuracy**: While efforts are made to provide accurate information, the system may not detect all errors or inconsistencies in financial documents.
 - **Professional Consultation**: Always consult with qualified financial professionals, accountants, and legal experts for financial decision-making.
 
+<img width="2752" height="1536" alt="unnamed" src="https://github.com/user-attachments/assets/4116f627-03cb-4529-9bdb-d9dbdd0009e2" />
+
 ## 🚀 Features
 
 ### Core Capabilities
