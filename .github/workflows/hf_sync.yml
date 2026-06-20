@@ -26,8 +26,16 @@ jobs:
       - name: Ensure Git LFS is initialized
         run: git lfs install --local
 
-      - name: Push to Hugging Face
+      - name: Build deployment snapshot (without sample PDFs)
+        run: |
+          git checkout --orphan hf-deploy
+          git reset --hard
+          rm -rf data_samples
+          git add -A
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" commit -m "Deploy to Hugging Face Space"
+
+      - name: Push snapshot to Hugging Face
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          git push --force https://oauth2:$HF_TOKEN@huggingface.co/spaces/wohoo1/Financial-RAG HEAD:main
+          git push --force https://oauth2:$HF_TOKEN@huggingface.co/spaces/wohoo1/Financial-RAG hf-deploy:main
