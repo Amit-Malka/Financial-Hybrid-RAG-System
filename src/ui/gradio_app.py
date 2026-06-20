@@ -3,6 +3,7 @@ import os
 import shutil
 import logging
 import time
+from pathlib import Path
 
 # Fix ChromaDB telemetry errors
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
@@ -21,8 +22,6 @@ from ..processing.pdf_to_html import convert_pdf_to_html
 from ..processing.pdf_parser import load_html
 from ..processing.chunker import chunk_document
 from ..graph.neo4j_graph import Neo4jGraph
-from ..evaluation.ragas_evaluation import evaluate_ragas
-from ..evaluation.deepeval_evaluation import evaluate_deepeval
 from ..config import Config
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
@@ -33,6 +32,31 @@ from langchain_cohere import CohereRerank
 # Initialize logging for UI component
 initialize_logging(component_name="ui")
 logger = logging.getLogger("ui")
+
+BASE_DIR = Path(__file__).resolve().parents[2]
+UPLOAD_DIR = BASE_DIR / "data" / "uploads"
+CHROMA_DIRS = [BASE_DIR / "chroma_db", BASE_DIR / "chroma", BASE_DIR / ".chroma"]
+
+
+def evaluate_with_deepeval(question, answer, context_docs, ground_truth, model_name, provider, api_key):
+    """Lazy-load DeepEval module to keep app startup lightweight in Spaces."""
+    try:
+        from ..evaluation.deepeval_evaluation import evaluate_deepeval
+    except Exception as exc:
+        logger.error(f"DeepEval import failed: {exc}")
+        return {
+            "error": "DeepEval dependencies are not installed in this deployment. Install optional evaluation dependencies to enable this feature."
+        }
+
+    return evaluate_deepeval(
+        question=question,
+        answer=answer,
+        context_docs=context_docs,
+        ground_truth=ground_truth,
+        model_name=model_name,
+        provider=provider,
+        api_key=api_key,
+    )
 
 # Global variables
 elements = []
@@ -132,9 +156,8 @@ def clear_global_state():
         
     # Clear any ChromaDB persistence directories for single-document mode
     try:
-        chroma_dirs = ["./chroma_db", "./chroma", "./.chroma"]
-        for chroma_dir in chroma_dirs:
-            if os.path.exists(chroma_dir):
+        for chroma_dir in CHROMA_DIRS:
+            if chroma_dir.exists():
                 shutil.rmtree(chroma_dir)
                 logger.info(f"Cleared ChromaDB directory: {chroma_dir}")
     except Exception as e:
@@ -159,18 +182,18 @@ def process_file_with_progress(file):
 
         yield "📁 **Step 2/5:** Saving uploaded file..."
         # Save/copy the uploaded file to project uploads dir
-        os.makedirs(os.path.join("data", "uploads"), exist_ok=True)
-        upload_path = os.path.join("data", "uploads", os.path.basename(src_path))
-        if os.path.abspath(src_path) != os.path.abspath(upload_path):
-            shutil.copyfile(src_path, upload_path)
+        UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        upload_path = UPLOAD_DIR / os.path.basename(src_path)
+        if os.path.abspath(src_path) != str(upload_path.resolve()):
+            shutil.copyfile(src_path, str(upload_path))
         time.sleep(0.5)
 
         logger.info(f"Copy complete to {upload_path}")
 
         yield "🔄 **Step 3/5:** Converting PDF to HTML..."
         # Convert PDF to HTML
-        html_content = convert_pdf_to_html(upload_path)
-        html_path = upload_path + ".html"
+        html_content = convert_pdf_to_html(str(upload_path))
+        html_path = upload_path.with_suffix(upload_path.suffix + ".html")
         with open(html_path, "w", encoding="utf-8") as f:
             f.write(html_content)
         time.sleep(1)
@@ -186,7 +209,7 @@ def process_file_with_progress(file):
 
         yield "✂️ **Step 5/5:** Creating document chunks..."
         # Stash title for graph scoping and isolation
-        last_doc_title = os.path.basename(html_path)
+        last_doc_title = os.path.basename(str(html_path))
         
         # Chunk the document with title for isolation
         chunks = chunk_document(elements, document_title=last_doc_title)
@@ -679,7 +702,7 @@ def run_evaluation_with_progress(ground_truth):
             logger.critical(f"🔍 Google API key length: {len(global_google_api_key.strip())} chars")
             logger.critical(f"🔍 Calling evaluate_deepeval(provider='google', model='gemini-1.5-pro-002')")
             
-            result = evaluate_deepeval(
+            result = evaluate_with_deepeval(
                 question=question,
                 answer=last_answer,
                 context_docs=last_context,
@@ -694,7 +717,7 @@ def run_evaluation_with_progress(ground_truth):
         elif global_openai_api_key and global_openai_api_key.strip():
             # Priority 2: Use DeepEval with OpenAI (fallback)
             logger.critical("🔍 ❌ NO GOOGLE KEY - Using OpenAI fallback")
-            result = evaluate_deepeval(
+            result = evaluate_with_deepeval(
                 question=question,
                 answer=last_answer,
                 context_docs=last_context,
